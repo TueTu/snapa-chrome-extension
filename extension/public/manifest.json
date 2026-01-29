@@ -5,7 +5,21 @@
   "description": "A simple AI Chat extension powering by Gemini",
   "action": {
     "default_popup": "index.html",
-    "default_title": "Chat with AI"
+    "default_title": "Chat with AI",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
   },
-  "permissions": []
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+
+  "permissions": ["contextMenus", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  }
 }

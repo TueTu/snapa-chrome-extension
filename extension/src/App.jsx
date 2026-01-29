@@ -36,17 +36,32 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
+  useEffect(() => {
+    // Check for selected text from context menu
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get("selectedText", (data) => {
+        if (data.selectedText) {
+          setInput(data.selectedText);
+          // Clear storage after reading
+          chrome.storage.local.remove("selectedText");
+        }
+      });
+    }
+  }, []);
 
-    const userMessage = { text: input, sender: "user" };
+  const sendMessage = async (textOverride = null) => {
+    const textToSend = typeof textOverride === 'string' ? textOverride : input;
+    
+    if (!textToSend.trim()) return;
+
+    const userMessage = { text: textToSend, sender: "user" };
     setMessages(prev => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
 
     try {
       const response = await axios.post('http://localhost:3000/api/chat', { 
-        message: input 
+        message: textToSend 
       });
       
       const aiMessage = { text: response.data.reply, sender: "ai" };
@@ -57,6 +72,16 @@ function App() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleTemplateChange = (e) => {
+    const template = e.target.value;
+    if (!template || !input.trim()) return;
+    
+    const prompt = `${template}:\n\n"${input}"`;
+    sendMessage(prompt);
+    // Reset select to default
+    e.target.value = "";
   };
 
   const handleKeyPress = (e) => {
@@ -113,21 +138,31 @@ function App() {
       </div>
 
       <div className="input-area">
-        <div className="input-wrapper">
-          <input 
-            type="text" 
-            value={input} 
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyPress}
-            placeholder="Type a message..."
-            disabled={isLoading}
-          />
+        <div className="template-selector">
+          <select onChange={handleTemplateChange} defaultValue="" disabled={isLoading || !input.trim()}>
+            <option value="" disabled>Select a template...</option>
+            <option value="Summarize">Summarize</option>
+            <option value="Explain with easy words">Explain with easy words</option>
+            <option value="Explain with example">Explain with example</option>
+          </select>
         </div>
-        <button className="send-btn" onClick={sendMessage} disabled={isLoading || !input.trim()}>
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-          </svg>
-        </button>
+        <div className="input-row">
+          <div className="input-wrapper">
+            <input 
+              type="text" 
+              value={input} 
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyPress}
+              placeholder="Type a message..."
+              disabled={isLoading}
+            />
+          </div>
+          <button className="send-btn" onClick={sendMessage} disabled={isLoading || !input.trim()}>
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   );
