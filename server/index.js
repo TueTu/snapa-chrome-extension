@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,8 +9,10 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize Gemini API
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Initialize OpenAI API
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 app.post('/api/chat', async (req, res) => {
   try {
@@ -20,12 +22,12 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    // Use gemini-pro model for text-only chat
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const completion = await openai.chat.completions.create({
+      messages: [{ role: "user", content: message }],
+      model: "gpt-4o",
+    });
 
-    const result = await model.generateContent(message);
-    const response = await result.response;
-    const text = response.text();
+    const text = completion.choices[0].message.content;
 
     res.json({ reply: text });
   } catch (error) {
