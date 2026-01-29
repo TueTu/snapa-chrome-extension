@@ -1,31 +1,35 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import axios from 'axios';
-import './index.css';
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import axios from "axios";
+import "./index.css";
 
 function App() {
   const [messages, setMessages] = useState([
-    { text: "Hello! How can I help you today?", sender: "ai" }
+    { text: "Hello! How can I help you today?", sender: "ai" },
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('theme') || 
-        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    if (typeof window !== "undefined") {
+      return (
+        localStorage.getItem("theme") ||
+        (window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light")
+      );
     }
-    return 'dark';
+    return "dark";
   });
 
   const messagesEndRef = useRef(null);
 
   useLayoutEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
   }, [theme]);
 
   const toggleTheme = () => {
-    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
   };
 
   const scrollToBottom = () => {
@@ -38,7 +42,11 @@ function App() {
 
   useEffect(() => {
     // Check for selected text from context menu
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    if (
+      typeof chrome !== "undefined" &&
+      chrome.storage &&
+      chrome.storage.local
+    ) {
       chrome.storage.local.get("selectedText", (data) => {
         if (data.selectedText) {
           setInput(data.selectedText);
@@ -50,25 +58,33 @@ function App() {
   }, []);
 
   const sendMessage = async (textOverride = null) => {
-    const textToSend = typeof textOverride === 'string' ? textOverride : input;
-    
+    const textToSend = typeof textOverride === "string" ? textOverride : input;
+
     if (!textToSend.trim()) return;
 
     const userMessage = { text: textToSend, sender: "user" };
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:3000/api/chat', { 
-        message: textToSend 
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const response = await axios.post(`${apiUrl}/api/chat`, {
+        message: textToSend,
       });
-      
+
       const aiMessage = { text: response.data.reply, sender: "ai" };
-      setMessages(prev => [...prev, aiMessage]);
+      setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error("Error:", error);
-      setMessages(prev => [...prev, { text: "Sorry, something went wrong. Make sure the server is running.", sender: "ai", error: true }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: "Sorry, something went wrong. Make sure the server is running.",
+          sender: "ai",
+          error: true,
+        },
+      ]);
     } finally {
       setIsLoading(false);
     }
@@ -77,7 +93,7 @@ function App() {
   const handleTemplateChange = (e) => {
     const template = e.target.value;
     if (!template || !input.trim()) return;
-    
+
     const prompt = `${template}:\n\n"${input}"`;
     sendMessage(prompt);
     // Reset select to default
@@ -85,7 +101,7 @@ function App() {
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       sendMessage();
     }
   };
@@ -96,13 +112,35 @@ function App() {
         <div className="header-content">
           <h1>AI Assistant</h1>
         </div>
-        <button onClick={toggleTheme} className="theme-toggle" aria-label="Toggle theme">
-          {theme === 'light' ? (
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+        <button
+          onClick={toggleTheme}
+          className="theme-toggle"
+          aria-label="Toggle theme"
+        >
+          {theme === "light" ? (
+            <svg
+              viewBox="0 0 24 24"
+              width="20"
+              height="20"
+              stroke="currentColor"
+              strokeWidth="2"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
             </svg>
           ) : (
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              viewBox="0 0 24 24"
+              width="20"
+              height="20"
+              stroke="currentColor"
+              strokeWidth="2"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <circle cx="12" cy="12" r="5"></circle>
               <line x1="12" y1="1" x2="12" y2="3"></line>
               <line x1="12" y1="21" x2="12" y2="23"></line>
@@ -116,20 +154,23 @@ function App() {
           )}
         </button>
       </header>
-      
+
       <div className="chat-window">
         {messages.map((msg, index) => (
-          <div key={index} className={`message ${msg.sender} ${msg.error ? 'error' : ''}`}>
-            <div className="message-content">
-              {msg.text}
-            </div>
+          <div
+            key={index}
+            className={`message ${msg.sender} ${msg.error ? "error" : ""}`}
+          >
+            <div className="message-content">{msg.text}</div>
           </div>
         ))}
         {isLoading && (
           <div className="message ai">
             <div className="message-content">
               <div className="typing-indicator">
-                <span></span><span></span><span></span>
+                <span></span>
+                <span></span>
+                <span></span>
               </div>
             </div>
           </div>
@@ -139,25 +180,37 @@ function App() {
 
       <div className="input-area">
         <div className="template-selector">
-          <select onChange={handleTemplateChange} defaultValue="" disabled={isLoading || !input.trim()}>
-            <option value="" disabled>Select a template...</option>
+          <select
+            onChange={handleTemplateChange}
+            defaultValue=""
+            disabled={isLoading || !input.trim()}
+          >
+            <option value="" disabled>
+              Select a template...
+            </option>
             <option value="Summarize">Summarize</option>
-            <option value="Explain with easy words">Explain with easy words</option>
+            <option value="Explain with easy words">
+              Explain with easy words
+            </option>
             <option value="Explain with example">Explain with example</option>
           </select>
         </div>
         <div className="input-row">
           <div className="input-wrapper">
-            <input 
-              type="text" 
-              value={input} 
+            <input
+              type="text"
+              value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyPress}
               placeholder="Type a message..."
               disabled={isLoading}
             />
           </div>
-          <button className="send-btn" onClick={sendMessage} disabled={isLoading || !input.trim()}>
+          <button
+            className="send-btn"
+            onClick={sendMessage}
+            disabled={isLoading || !input.trim()}
+          >
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
