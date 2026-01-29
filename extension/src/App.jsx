@@ -42,14 +42,11 @@ function App() {
 
   useEffect(() => {
     // Check for selected text from context menu
-    if (
-      typeof chrome !== "undefined" &&
-      chrome.storage &&
-      chrome.storage.local
-    ) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get("selectedText", (data) => {
-        if (data.selectedText) {
-          setInput(data.selectedText);
+        if (data && data.selectedText) {
+          const text = typeof data.selectedText === 'string' ? data.selectedText : String(data.selectedText);
+          setInput(text);
           // Clear storage after reading
           chrome.storage.local.remove("selectedText");
         }
@@ -60,7 +57,7 @@ function App() {
   const sendMessage = async (textOverride = null) => {
     const textToSend = typeof textOverride === "string" ? textOverride : input;
 
-    if (!textToSend.trim()) return;
+    if (!String(textToSend).trim()) return;
 
     const userMessage = { text: textToSend, sender: "user" };
     setMessages((prev) => [...prev, userMessage]);
@@ -73,18 +70,15 @@ function App() {
         message: textToSend,
       });
 
-      const aiMessage = { text: response.data.reply, sender: "ai" };
+      const replyData = response.data && response.data.reply;
+      const finalText = typeof replyData === 'string' ? replyData : JSON.stringify(replyData || "Empty response");
+      
+      const aiMessage = { text: finalText, sender: "ai" };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error("Error:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          text: "Sorry, something went wrong. Make sure the server is running.",
-          sender: "ai",
-          error: true,
-        },
-      ]);
+      const errorMessage = error.response?.data?.error || error.message || "Sorry, something went wrong.";
+      setMessages(prev => [...prev, { text: String(errorMessage), sender: "ai", error: true }]);
     } finally {
       setIsLoading(false);
     }
@@ -161,7 +155,9 @@ function App() {
             key={index}
             className={`message ${msg.sender} ${msg.error ? "error" : ""}`}
           >
-            <div className="message-content">{msg.text}</div>
+            <div className="message-content">
+              {typeof msg.text === 'object' ? JSON.stringify(msg.text) : msg.text}
+            </div>
           </div>
         ))}
         {isLoading && (
