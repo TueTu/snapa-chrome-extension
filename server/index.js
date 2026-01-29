@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
 
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -11,8 +13,13 @@ app.use(express.json());
 
 // Initialize OpenAI API
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY || 'dummy_key_for_init',
 });
+
+// Initialize Gemini API
+const genAI = process.env.GEMINI_API_KEY 
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  : null;
 
 app.post('/api/chat', async (req, res) => {
   try {
@@ -22,17 +29,29 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const completion = await openai.chat.completions.create({
-      messages: [{ role: "user", content: message }],
-      model: "gpt-4o",
-    });
+    let textStr = "";
 
-    const text = completion.choices[0].message.content;
+    if (genAI) {
+      // Use Gemini if configured
+      console.log("Using Gemini API");
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const result = await model.generateContent(message);
+      const response = await result.response;
+      textStr = response.text();
+    } else {
+      // Fallback to OpenAI
+      console.log("Using OpenAI API");
+      const completion = await openai.chat.completions.create({
+        messages: [{ role: "user", content: message }],
+        model: "gpt-4o",
+      });
+      textStr = completion.choices[0].message.content;
+    }
 
-    res.json({ reply: text });
+    res.json({ reply: textStr });
   } catch (error) {
     console.error('Error generating response:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ error: 'Internal Server Error: ' + error.message });
   }
 });
 
