@@ -9,7 +9,7 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId === "snapa-extension-action") {
     let selectedText = info.selectionText || "";
     

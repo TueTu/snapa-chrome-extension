@@ -1,16 +1,28 @@
-# React + Vite
+# Snapa Chrome Extension
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/Vite Chrome extension that lets each user chat with Gemini using their own API key.
 
-Currently, two official plugins are available:
+## How It Works
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- The extension asks the user for a Gemini API key in the popup.
+- The key is stored in Chrome local extension storage on that user's device.
+- Chat requests go directly from the extension to the Gemini API.
+- There is no Node/Express backend and no shared owner API key.
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Install dependencies and build the extension:
 
-## Expanding the ESLint configuration
+```bash
+npm install
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Load the generated `dist` folder in Chrome:
+
+1. Open `chrome://extensions`.
+2. Enable Developer mode.
+3. Choose "Load unpacked".
+4. Select `extension/dist`.
+
+Node.js is only needed for development/build commands. Users do not need a Node server running for the extension to work.

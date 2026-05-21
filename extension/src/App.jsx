@@ -1,12 +1,96 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
-import axios from "axios";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import "./index.css";
+
+const API_KEY_STORAGE_KEY = "geminiApiKey";
+const MODEL_NAME = "gemini-1.5-flash";
+
+const getChromeStorage = () =>
+  typeof chrome !== "undefined" && chrome.storage?.local
+    ? chrome.storage.local
+    : null;
+
+const readStoredValue = (key) =>
+  new Promise((resolve) => {
+    const storage = getChromeStorage();
+
+    if (storage) {
+      storage.get(key, (data) => resolve(data?.[key] || ""));
+      return;
+    }
+
+    resolve(localStorage.getItem(key) || "");
+  });
+
+const saveStoredValue = (key, value) =>
+  new Promise((resolve) => {
+    const storage = getChromeStorage();
+
+    if (storage) {
+      storage.set({ [key]: value }, resolve);
+      return;
+    }
+
+    localStorage.setItem(key, value);
+    resolve();
+  });
+
+const removeStoredValue = (key) =>
+  new Promise((resolve) => {
+    const storage = getChromeStorage();
+
+    if (storage) {
+      storage.remove(key, resolve);
+      return;
+    }
+
+    localStorage.removeItem(key);
+    resolve();
+  });
+
+const callGemini = async (apiKey, message) => {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: message }],
+          },
+        ],
+      }),
+    },
+  );
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message || `Gemini request failed (${response.status})`,
+    );
+  }
+
+  const reply = data?.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text || "")
+    .join("")
+    .trim();
+
+  return reply || "Gemini returned an empty response.";
+};
 
 function App() {
   const [messages, setMessages] = useState([
-    { text: "Hello! How can I help you today?", sender: "ai" },
+    { text: "Add your Gemini API key, then ask me anything.", sender: "ai" },
   ]);
   const [input, setInput] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [isSavingKey, setIsSavingKey] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -41,11 +125,19 @@ function App() {
   }, [messages]);
 
   useEffect(() => {
+    readStoredValue(API_KEY_STORAGE_KEY).then((storedApiKey) => {
+      setApiKey(storedApiKey);
+      setApiKeyInput(storedApiKey);
+    });
+
     // Check for selected text from context menu
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get("selectedText", (data) => {
         if (data && data.selectedText) {
-          const text = typeof data.selectedText === 'string' ? data.selectedText : String(data.selectedText);
+          const text =
+            typeof data.selectedText === "string"
+              ? data.selectedText
+              : String(data.selectedText);
           setInput(text);
           // Clear storage after reading
           chrome.storage.local.remove("selectedText");
@@ -54,10 +146,38 @@ function App() {
     }
   }, []);
 
+  const saveApiKey = async () => {
+    const trimmedApiKey = apiKeyInput.trim();
+
+    setIsSavingKey(true);
+    await saveStoredValue(API_KEY_STORAGE_KEY, trimmedApiKey);
+    setApiKey(trimmedApiKey);
+    setIsSavingKey(false);
+  };
+
+  const clearApiKey = async () => {
+    setIsSavingKey(true);
+    await removeStoredValue(API_KEY_STORAGE_KEY);
+    setApiKey("");
+    setApiKeyInput("");
+    setIsSavingKey(false);
+  };
+
   const sendMessage = async (textOverride = null) => {
     const textToSend = typeof textOverride === "string" ? textOverride : input;
 
     if (!String(textToSend).trim()) return;
+    if (!apiKey) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: "Please save your Gemini API key before sending a message.",
+          sender: "ai",
+          error: true,
+        },
+      ]);
+      return;
+    }
 
     const userMessage = { text: textToSend, sender: "user" };
     setMessages((prev) => [...prev, userMessage]);
@@ -65,20 +185,16 @@ function App() {
     setIsLoading(true);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
-      const response = await axios.post(`${apiUrl}/api/chat`, {
-        message: textToSend,
-      });
-
-      const replyData = response.data && response.data.reply;
-      const finalText = typeof replyData === 'string' ? replyData : JSON.stringify(replyData || "Empty response");
-      
+      const finalText = await callGemini(apiKey, textToSend);
       const aiMessage = { text: finalText, sender: "ai" };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error("Error:", error);
-      const errorMessage = error.response?.data?.error || error.message || "Sorry, something went wrong.";
-      setMessages(prev => [...prev, { text: String(errorMessage), sender: "ai", error: true }]);
+      const errorMessage = error.message || "Sorry, something went wrong.";
+      setMessages((prev) => [
+        ...prev,
+        { text: String(errorMessage), sender: "ai", error: true },
+      ]);
     } finally {
       setIsLoading(false);
     }
@@ -104,7 +220,10 @@ function App() {
     <div className="app-container">
       <header className="chat-header">
         <div className="header-content">
-          <h1>AI Assistant</h1>
+          <h1>Snapa AI</h1>
+          <span className={`key-status ${apiKey ? "ready" : ""}`}>
+            {apiKey ? "Key saved" : "No API key"}
+          </span>
         </div>
         <button
           onClick={toggleTheme}
@@ -149,6 +268,36 @@ function App() {
         </button>
       </header>
 
+      <section className="api-key-panel" aria-label="Gemini API key settings">
+        <label htmlFor="api-key">Gemini API key</label>
+        <div className="api-key-row">
+          <input
+            id="api-key"
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            placeholder="Paste your Gemini API key"
+            disabled={isSavingKey}
+          />
+          <button
+            type="button"
+            className="key-btn primary"
+            onClick={saveApiKey}
+            disabled={isSavingKey || !apiKeyInput.trim()}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="key-btn"
+            onClick={clearApiKey}
+            disabled={isSavingKey || (!apiKey && !apiKeyInput)}
+          >
+            Clear
+          </button>
+        </div>
+      </section>
+
       <div className="chat-window">
         {messages.map((msg, index) => (
           <div
@@ -179,7 +328,7 @@ function App() {
           <select
             onChange={handleTemplateChange}
             defaultValue=""
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || !apiKey || !input.trim()}
           >
             <option value="" disabled>
               Select a template...
@@ -199,13 +348,13 @@ function App() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyPress}
               placeholder="Type a message..."
-              disabled={isLoading}
+              disabled={isLoading || !apiKey}
             />
           </div>
           <button
             className="send-btn"
             onClick={sendMessage}
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || !apiKey || !input.trim()}
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
