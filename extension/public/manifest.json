@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Chat Extension",
   "version": "1.0",
-  "description": "A simple AI Chat extension powering by Gemini",
+  "description": "A simple AI chat extension powered by the user's Gemini API key",
   "action": {
     "default_popup": "index.html",
     "default_title": "Chat with AI",
@@ -19,6 +19,7 @@
   },
 
   "permissions": ["contextMenus", "storage"],
+  "host_permissions": ["https://generativelanguage.googleapis.com/*"],
   "background": {
     "service_worker": "background.js"
   }
