@@ -3,7 +3,9 @@ import "./index.css";
 
 const API_CONFIG_STORAGE_KEY = "aiProviderConfig";
 const CUSTOM_TEMPLATES_STORAGE_KEY = "customTemplates";
+const CHAT_HISTORY_STORAGE_KEY = "chatHistory";
 const LEGACY_GEMINI_KEY = "geminiApiKey";
+const MAX_SAVED_MESSAGES = 30;
 
 const DEFAULT_TEMPLATES = [
   { id: "summarize", label: "Summarize", instruction: "Summarize" },
@@ -298,6 +300,24 @@ const validateApiConfig = (provider, apiKey) =>
     "Reply with exactly this word and no punctuation: OK",
   );
 
+const normalizeMessages = (messages) =>
+  messages
+    .filter(
+      (message) =>
+        typeof message?.text === "string" &&
+        (message.sender === "user" || message.sender === "ai"),
+    )
+    .map((message) => ({
+      text: message.text,
+      sender: message.sender,
+      ...(message.error ? { error: true } : {}),
+    }));
+
+const getSavedMessages = (messages) =>
+  normalizeMessages(messages)
+    .filter((message) => !message.error)
+    .slice(-MAX_SAVED_MESSAGES);
+
 function App() {
   const [messages, setMessages] = useState([
     { text: "Ask me anything.", sender: "ai" },
@@ -308,6 +328,7 @@ function App() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
+  const [isChatHistoryLoaded, setIsChatHistoryLoaded] = useState(false);
   const [isEditingConfig, setIsEditingConfig] = useState(false);
   const [setupError, setSetupError] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
@@ -383,6 +404,27 @@ function App() {
       setIsConfigLoaded(true);
     });
 
+    readStoredValue(CHAT_HISTORY_STORAGE_KEY).then((storedHistory) => {
+      if (!storedHistory) {
+        setIsChatHistoryLoaded(true);
+        return;
+      }
+
+      try {
+        const parsedHistory = JSON.parse(storedHistory);
+        if (Array.isArray(parsedHistory)) {
+          const nextMessages = getSavedMessages(parsedHistory);
+          if (nextMessages.length > 0) {
+            setMessages(nextMessages);
+          }
+        }
+      } catch {
+        // Ignore invalid stored history and start fresh.
+      } finally {
+        setIsChatHistoryLoaded(true);
+      }
+    });
+
     readStoredValue(CUSTOM_TEMPLATES_STORAGE_KEY).then((storedTemplates) => {
       if (!storedTemplates) return;
 
@@ -418,6 +460,15 @@ function App() {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (!isChatHistoryLoaded) return;
+
+    saveStoredValue(
+      CHAT_HISTORY_STORAGE_KEY,
+      JSON.stringify(getSavedMessages(messages)),
+    );
+  }, [isChatHistoryLoaded, messages]);
 
   const saveApiConfig = async () => {
     const trimmedApiKey = apiKeyInput.trim();
@@ -496,6 +547,12 @@ function App() {
 
     if (confirmAction === "clear") {
       await clearApiConfig();
+      setConfirmAction(null);
+    }
+
+    if (confirmAction === "clear-chat") {
+      await removeStoredValue(CHAT_HISTORY_STORAGE_KEY);
+      setMessages([{ text: "Ask me anything.", sender: "ai" }]);
       setConfirmAction(null);
     }
   };
@@ -607,6 +664,14 @@ function App() {
           confirmLabel: "Clear key",
           danger: true,
         }
+      : confirmAction === "clear-chat"
+        ? {
+            title: "Clear chat?",
+            message:
+              "This removes the saved conversation from this browser. Your API key and custom comments stay saved.",
+            confirmLabel: "Clear chat",
+            danger: true,
+          }
       : {
           title: "Change provider?",
           message:
@@ -615,7 +680,7 @@ function App() {
           danger: false,
         };
 
-  if (!isConfigLoaded) {
+  if (!isConfigLoaded || !isChatHistoryLoaded) {
     return (
       <div className="app-container">
         <div className="loading-screen">Loading...</div>
@@ -792,17 +857,26 @@ function App() {
                   <span>Change provider</span>
                   <small>Use another API key</small>
                 </button>
-                <button
-                  type="button"
-                  className="provider-action-item danger"
-                  onClick={() => openConfirm("clear")}
-                  role="menuitem"
-                >
-                  <span>Clear saved key</span>
-                  <small>Return to setup</small>
-                </button>
-              </div>
-            </>
+              <button
+                type="button"
+                className="provider-action-item danger"
+                onClick={() => openConfirm("clear")}
+                role="menuitem"
+              >
+                <span>Clear saved key</span>
+                <small>Return to setup</small>
+              </button>
+              <button
+                type="button"
+                className="provider-action-item danger"
+                onClick={() => openConfirm("clear-chat")}
+                role="menuitem"
+              >
+                <span>Clear chat</span>
+                <small>Keep provider settings</small>
+              </button>
+            </div>
+          </>
           )}
         </div>
         <button
