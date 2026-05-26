@@ -295,6 +295,7 @@ function App() {
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const [isEditingConfig, setIsEditingConfig] = useState(false);
   const [setupError, setSetupError] = useState("");
+  const [confirmAction, setConfirmAction] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -420,6 +421,30 @@ function App() {
     setIsSavingConfig(false);
   };
 
+  const openConfirm = (action) => {
+    setConfirmAction(action);
+  };
+
+  const closeConfirm = () => {
+    if (isSavingConfig) return;
+    setConfirmAction(null);
+  };
+
+  const confirmProviderAction = async () => {
+    if (confirmAction === "change") {
+      setApiKeyInput(apiKey);
+      setSetupError("");
+      setIsEditingConfig(true);
+      setConfirmAction(null);
+      return;
+    }
+
+    if (confirmAction === "clear") {
+      await clearApiConfig();
+      setConfirmAction(null);
+    }
+  };
+
   const sendMessage = async (textOverride = null) => {
     const textToSend = typeof textOverride === "string" ? textOverride : input;
 
@@ -494,6 +519,22 @@ function App() {
 
   const activeProvider = PROVIDERS[provider];
   const shouldShowSetup = isConfigLoaded && (!apiKey || isEditingConfig);
+  const confirmDetails =
+    confirmAction === "clear"
+      ? {
+          title: "Clear API key?",
+          message:
+            "This removes the saved key from this browser. You will need to add an API key again before chatting.",
+          confirmLabel: "Clear key",
+          danger: true,
+        }
+      : {
+          title: "Change provider?",
+          message:
+            "This opens setup so you can change the provider or replace the saved API key.",
+          confirmLabel: "Continue",
+          danger: false,
+        };
 
   if (!isConfigLoaded) {
     return (
@@ -686,13 +727,51 @@ function App() {
 
       <section className="provider-bar" aria-label="AI provider settings">
         <span>{activeProvider.label}</span>
-        <button type="button" className="link-btn" onClick={() => setIsEditingConfig(true)}>
+        <button type="button" className="link-btn" onClick={() => openConfirm("change")}>
           Change
         </button>
-        <button type="button" className="link-btn danger" onClick={clearApiConfig}>
+        <button type="button" className="link-btn danger" onClick={() => openConfirm("clear")}>
           Clear
         </button>
       </section>
+
+      {confirmAction && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeConfirm();
+          }}
+        >
+          <section
+            className="confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-title"
+          >
+            <h2 id="confirm-title">{confirmDetails.title}</h2>
+            <p>{confirmDetails.message}</p>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="key-btn"
+                onClick={closeConfirm}
+                disabled={isSavingConfig}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={`key-btn ${confirmDetails.danger ? "danger" : "primary"}`}
+                onClick={confirmProviderAction}
+                disabled={isSavingConfig}
+              >
+                {isSavingConfig ? "Working..." : confirmDetails.confirmLabel}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       <div className="chat-window">
         {messages.map((msg, index) => (
