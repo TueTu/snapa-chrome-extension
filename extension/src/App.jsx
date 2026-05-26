@@ -11,11 +11,11 @@ const PROVIDERS = {
     keyPlaceholder: "Paste your Gemini API key",
     model: "gemini-1.5-flash",
   },
-  openai: {
-    label: "OpenAI",
-    keyLabel: "OpenAI API key",
-    keyPlaceholder: "Paste your OpenAI API key",
-    model: "gpt-4o-mini",
+  openrouter: {
+    label: "OpenRouter",
+    keyLabel: "OpenRouter API key",
+    keyPlaceholder: "Paste your OpenRouter API key",
+    model: "openrouter/free",
   },
 };
 
@@ -139,18 +139,23 @@ const callGemini = async (apiKey, message) => {
   return reply || "Gemini returned an empty response.";
 };
 
-const callOpenAI = async (apiKey, message) => {
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+const callOpenRouter = async (apiKey, message) => {
+  const response = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://snapa.local",
+        "X-Title": "Snapa AI",
+      },
+      body: JSON.stringify({
+        model: PROVIDERS.openrouter.model,
+        messages: [{ role: "user", content: message }],
+      }),
     },
-    body: JSON.stringify({
-      model: PROVIDERS.openai.model,
-      messages: [{ role: "user", content: message }],
-    }),
-  });
+  );
 
   const data = await response.json().catch(() => null);
 
@@ -159,7 +164,8 @@ const callOpenAI = async (apiKey, message) => {
 
     if (response.status === 401 || response.status === 403) {
       throw new ApiAuthError(
-        data?.error?.message || "Your OpenAI API key is missing or invalid.",
+        data?.error?.message ||
+          "Your OpenRouter API key is missing or invalid.",
         response.status,
         String(errorCode),
       );
@@ -172,25 +178,25 @@ const callOpenAI = async (apiKey, message) => {
     ) {
       throw new ApiUsageError(
         data?.error?.message ||
-          "Your OpenAI API key has reached its quota or billing limit.",
+          "Your OpenRouter API key has reached its quota or rate limit.",
         response.status,
         String(errorCode),
       );
     }
 
     throw new Error(
-      data?.error?.message || `OpenAI request failed (${response.status})`,
+      data?.error?.message || `OpenRouter request failed (${response.status})`,
     );
   }
 
   const reply = data?.choices?.[0]?.message?.content?.trim();
 
-  return reply || "OpenAI returned an empty response.";
+  return reply || "OpenRouter returned an empty response.";
 };
 
 const callProvider = (config, message) => {
-  if (config.provider === "openai") {
-    return callOpenAI(config.apiKey, message);
+  if (config.provider === "openrouter") {
+    return callOpenRouter(config.apiKey, message);
   }
 
   return callGemini(config.apiKey, message);
