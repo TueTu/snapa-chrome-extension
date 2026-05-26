@@ -2,7 +2,22 @@ import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import "./index.css";
 
 const API_CONFIG_STORAGE_KEY = "aiProviderConfig";
+const CUSTOM_TEMPLATES_STORAGE_KEY = "customTemplates";
 const LEGACY_GEMINI_KEY = "geminiApiKey";
+
+const DEFAULT_TEMPLATES = [
+  { id: "summarize", label: "Summarize", instruction: "Summarize" },
+  {
+    id: "explain",
+    label: "Explain simply",
+    instruction: "Explain this in simple words",
+  },
+  {
+    id: "key-points",
+    label: "Find key points",
+    instruction: "Find the key points",
+  },
+];
 
 const PROVIDERS = {
   gemini: {
@@ -296,6 +311,10 @@ function App() {
   const [isEditingConfig, setIsEditingConfig] = useState(false);
   const [setupError, setSetupError] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
+  const [isCustomPromptOpen, setIsCustomPromptOpen] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [customTemplates, setCustomTemplates] = useState([]);
+  const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -311,6 +330,7 @@ function App() {
   });
 
   const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
 
   useLayoutEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -360,6 +380,26 @@ function App() {
       setApiKey(nextApiKey);
       setApiKeyInput(nextApiKey);
       setIsConfigLoaded(true);
+    });
+
+    readStoredValue(CUSTOM_TEMPLATES_STORAGE_KEY).then((storedTemplates) => {
+      if (!storedTemplates) return;
+
+      try {
+        const parsedTemplates = JSON.parse(storedTemplates);
+        if (Array.isArray(parsedTemplates)) {
+          setCustomTemplates(
+            parsedTemplates.filter(
+              (template) =>
+                typeof template?.id === "string" &&
+                typeof template?.label === "string" &&
+                typeof template?.instruction === "string",
+            ),
+          );
+        }
+      } catch {
+        setCustomTemplates([]);
+      }
     });
 
     // Check for selected text from context menu
@@ -428,6 +468,19 @@ function App() {
   const closeConfirm = () => {
     if (isSavingConfig) return;
     setConfirmAction(null);
+  };
+
+  const closeCustomPrompt = () => {
+    setIsCustomPromptOpen(false);
+    setCustomPrompt("");
+  };
+
+  const saveCustomTemplates = async (nextTemplates) => {
+    setCustomTemplates(nextTemplates);
+    await saveStoredValue(
+      CUSTOM_TEMPLATES_STORAGE_KEY,
+      JSON.stringify(nextTemplates),
+    );
   };
 
   const confirmProviderAction = async () => {
@@ -501,14 +554,38 @@ function App() {
     }
   };
 
-  const handleTemplateChange = (e) => {
-    const template = e.target.value;
-    if (!template || !input.trim()) return;
+  const applyTemplate = (template) => {
+    setIsTemplateMenuOpen(false);
+    if (!input.trim()) {
+      setInput(`${template.instruction}: `);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
 
-    const prompt = `${template}:\n\n"${input}"`;
+    const prompt = `${template.instruction}:\n\n"${input}"`;
     sendMessage(prompt);
-    // Reset select to default
-    e.target.value = "";
+  };
+
+  const addCustomTemplate = async () => {
+    const instruction = customPrompt.trim();
+
+    if (!instruction) return;
+
+    const nextTemplate = {
+      id: `custom-${Date.now()}`,
+      label: instruction.length > 34 ? `${instruction.slice(0, 31)}...` : instruction,
+      instruction,
+    };
+
+    await saveCustomTemplates([...customTemplates, nextTemplate]);
+    closeCustomPrompt();
+    setIsTemplateMenuOpen(true);
+  };
+
+  const deleteCustomTemplate = async (templateId) => {
+    await saveCustomTemplates(
+      customTemplates.filter((template) => template.id !== templateId),
+    );
   };
 
   const handleKeyPress = (e) => {
@@ -773,6 +850,50 @@ function App() {
         </div>
       )}
 
+      {isCustomPromptOpen && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeCustomPrompt();
+          }}
+        >
+          <section
+            className="confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-prompt-title"
+          >
+            <h2 id="custom-prompt-title">Add custom instruction</h2>
+            <p>Type what you want the AI to do with your text.</p>
+            <input
+              className="custom-prompt-input"
+              type="text"
+              value={customPrompt}
+              onChange={(event) => setCustomPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") addCustomTemplate();
+              }}
+              placeholder="Example: Make this more friendly"
+              autoFocus
+            />
+            <div className="confirm-actions">
+              <button type="button" className="key-btn" onClick={closeCustomPrompt}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="key-btn primary"
+                onClick={addCustomTemplate}
+                disabled={!customPrompt.trim()}
+              >
+                Save
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       <div className="chat-window">
         {messages.map((msg, index) => (
           <div
@@ -800,24 +921,85 @@ function App() {
 
       <div className="input-area">
         <div className="template-selector">
-          <select
-            onChange={handleTemplateChange}
-            defaultValue=""
-            disabled={isLoading || !apiKey || !input.trim()}
+          <button
+            type="button"
+            className="template-menu-btn"
+            onClick={() => setIsTemplateMenuOpen((isOpen) => !isOpen)}
+            disabled={isLoading || !apiKey}
           >
-            <option value="" disabled>
+            <span>
               Select a template...
-            </option>
-            <option value="Summarize">Summarize</option>
-            <option value="Explain with easy words">
-              Explain with easy words
-            </option>
-            <option value="Explain with example">Explain with example</option>
-          </select>
+            </span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+
+          {isTemplateMenuOpen && (
+            <div className="template-menu">
+              {DEFAULT_TEMPLATES.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  className="template-item"
+                  onClick={() => applyTemplate(template)}
+                >
+                  {template.label}
+                </button>
+              ))}
+
+              {customTemplates.length > 0 && <div className="template-divider" />}
+
+              {customTemplates.map((template) => (
+                <div className="template-custom-item" key={template.id}>
+                  <button
+                    type="button"
+                    className="template-item custom"
+                    onClick={() => applyTemplate(template)}
+                  >
+                    {template.label}
+                  </button>
+                  <button
+                    type="button"
+                    className="template-delete-btn"
+                    onClick={() => deleteCustomTemplate(template.id)}
+                    aria-label={`Delete ${template.label}`}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                className="template-add-row"
+                onClick={() => {
+                  setIsTemplateMenuOpen(false);
+                  setIsCustomPromptOpen(true);
+                }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                Add custom comment
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="template-menu-close-area"
+            onClick={() => setIsTemplateMenuOpen(false)}
+            hidden={!isTemplateMenuOpen}
+            aria-label="Close template menu"
+          >
+          </button>
         </div>
         <div className="input-row">
           <div className="input-wrapper">
             <input
+              ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}

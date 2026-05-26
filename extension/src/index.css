@@ -356,6 +356,12 @@ body {
   margin-top: 1rem;
 }
 
+.custom-prompt-input {
+  margin-top: 0.85rem;
+  border-radius: 0.5rem;
+  border-color: var(--border-color);
+}
+
 .chat-window {
   flex: 1;
   overflow-y: auto;
@@ -441,35 +447,137 @@ body {
 
 .template-selector {
   width: 100%;
+  position: relative;
 }
 
-.template-selector select {
+.template-menu-btn {
   width: 100%;
+  min-height: 42px;
   padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
   background-color: var(--input-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
   font-size: 0.875rem;
-  outline: none;
   cursor: pointer;
-  transition: all 0.2s ease;
-  appearance: none;
-  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-  background-repeat: no-repeat;
-  background-position: right 0.75rem center;
-  background-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.template-selector select:hover {
+.template-menu-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.template-menu-btn:hover:not(:disabled),
+.template-menu-btn:focus {
   border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--shadow-sm);
 }
 
-.template-selector select:focus {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px var(--shadow-sm); /* Subtle visual cue */
+.template-menu-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
+.template-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.45rem);
+  z-index: 30;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--input-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.template-item,
+.template-add-row {
+  width: 100%;
+  min-height: 36px;
+  padding: 0.55rem 0.85rem;
+  border: none;
+  background: transparent;
+  color: var(--text-color);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.template-item:hover,
+.template-add-row:hover {
+  background: var(--hover-overlay);
+}
+
+.template-custom-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: stretch;
+}
+
+.template-item.custom {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-delete-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.template-delete-btn:hover {
+  color: #ef4444;
+  background: var(--hover-overlay);
+}
+
+.template-delete-btn svg,
+.template-add-row svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+}
+
+.template-add-row {
+  color: var(--primary-color);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.template-divider {
+  height: 1px;
+  background: var(--border-color);
+}
+
+.template-menu-close-area {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  background: transparent;
+  cursor: default;
+}
 
 .input-wrapper {
   flex: 1;
