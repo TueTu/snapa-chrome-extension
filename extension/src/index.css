@@ -213,7 +213,7 @@ body {
 }
 
 .provider-option {
-  min-height: 74px;
+  min-height: 58px;
   padding: 0.75rem;
   border-radius: 0.5rem;
   border: 1px solid var(--border-color);
@@ -223,18 +223,13 @@ body {
   text-align: left;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: center;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 .provider-option span {
   font-size: 0.95rem;
   font-weight: 700;
-}
-
-.provider-option small {
-  color: var(--text-secondary);
-  font-size: 0.72rem;
 }
 
 .provider-option.selected {
@@ -247,6 +242,22 @@ body {
   color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+.setup-error {
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.5rem;
+  border: 1px solid #fecaca;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+[data-theme="dark"] .setup-error {
+  border-color: #7f1d1d;
+  background: #450a0a;
+  color: #fca5a5;
 }
 
 .setup-actions {
