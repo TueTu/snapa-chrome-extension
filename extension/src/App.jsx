@@ -66,9 +66,20 @@ const normalizeProvider = (provider) =>
   Object.keys(PROVIDERS).includes(provider) ? provider : "gemini";
 
 class ApiAuthError extends Error {
-  constructor(message) {
+  constructor(message, status = null, code = "") {
     super(message);
     this.name = "ApiAuthError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+class ApiUsageError extends Error {
+  constructor(message, status = null, code = "") {
+    super(message);
+    this.name = "ApiUsageError";
+    this.status = status;
+    this.code = code;
   }
 }
 
@@ -96,9 +107,22 @@ const callGemini = async (apiKey, message) => {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
+    const errorCode = data?.error?.status || data?.error?.code || "";
+
     if (response.status === 401 || response.status === 403) {
       throw new ApiAuthError(
         data?.error?.message || "Your Gemini API key is missing or invalid.",
+        response.status,
+        String(errorCode),
+      );
+    }
+
+    if (response.status === 429) {
+      throw new ApiUsageError(
+        data?.error?.message ||
+          "Your Gemini API key has reached its quota or rate limit.",
+        response.status,
+        String(errorCode),
       );
     }
 
@@ -131,9 +155,26 @@ const callOpenAI = async (apiKey, message) => {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
+    const errorCode = data?.error?.code || data?.error?.type || "";
+
     if (response.status === 401 || response.status === 403) {
       throw new ApiAuthError(
         data?.error?.message || "Your OpenAI API key is missing or invalid.",
+        response.status,
+        String(errorCode),
+      );
+    }
+
+    if (
+      response.status === 429 ||
+      errorCode === "insufficient_quota" ||
+      errorCode === "billing_not_active"
+    ) {
+      throw new ApiUsageError(
+        data?.error?.message ||
+          "Your OpenAI API key has reached its quota or billing limit.",
+        response.status,
+        String(errorCode),
       );
     }
 
@@ -155,6 +196,27 @@ const callProvider = (config, message) => {
   return callGemini(config.apiKey, message);
 };
 
+const getApiErrorMessage = (provider, error) => {
+  const providerName = PROVIDERS[provider]?.label || "API";
+  const providerMessage = error?.message ? ` ${error.message}` : "";
+
+  if (error instanceof ApiAuthError) {
+    return `${providerName} rejected this API key. It may be invalid, expired, revoked, or missing permission.${providerMessage}`;
+  }
+
+  if (error instanceof ApiUsageError) {
+    return `${providerName} cannot use this key right now. It may be out of quota, rate limited, or missing billing access.${providerMessage}`;
+  }
+
+  return `${providerName} could not verify this key.${providerMessage || " Please try again."}`;
+};
+
+const validateApiConfig = (provider, apiKey) =>
+  callProvider(
+    { provider, apiKey },
+    "Reply with exactly this word and no punctuation: OK",
+  );
+
 function App() {
   const [messages, setMessages] = useState([
     { text: "Ask me anything.", sender: "ai" },
@@ -166,6 +228,7 @@ function App() {
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const [isEditingConfig, setIsEditingConfig] = useState(false);
+  const [setupError, setSetupError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -252,20 +315,32 @@ function App() {
     const trimmedApiKey = apiKeyInput.trim();
 
     setIsSavingConfig(true);
-    await saveStoredValue(
-      API_CONFIG_STORAGE_KEY,
-      JSON.stringify({ provider, apiKey: trimmedApiKey }),
-    );
-    setApiKey(trimmedApiKey);
-    setIsEditingConfig(false);
-    setMessages((prev) => [
-      ...prev,
-      {
-        text: `${PROVIDERS[provider].label} is ready. What do you want to ask?`,
-        sender: "ai",
-      },
-    ]);
-    setIsSavingConfig(false);
+    setSetupError("");
+
+    try {
+      await validateApiConfig(provider, trimmedApiKey);
+      await saveStoredValue(
+        API_CONFIG_STORAGE_KEY,
+        JSON.stringify({ provider, apiKey: trimmedApiKey }),
+      );
+      setApiKey(trimmedApiKey);
+      setIsEditingConfig(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: `${PROVIDERS[provider].label} is ready. What do you want to ask?`,
+          sender: "ai",
+        },
+      ]);
+    } catch (error) {
+      console.error("API key validation failed:", error);
+      setSetupError(getApiErrorMessage(provider, error));
+      setApiKey("");
+      await removeStoredValue(API_CONFIG_STORAGE_KEY);
+      await removeStoredValue(LEGACY_GEMINI_KEY);
+    } finally {
+      setIsSavingConfig(false);
+    }
   };
 
   const clearApiConfig = async () => {
@@ -274,6 +349,7 @@ function App() {
     await removeStoredValue(LEGACY_GEMINI_KEY);
     setApiKey("");
     setApiKeyInput("");
+    setSetupError("");
     setIsEditingConfig(true);
     setIsSavingConfig(false);
   };
@@ -312,10 +388,11 @@ function App() {
         setApiKey("");
         setApiKeyInput("");
         setIsEditingConfig(true);
+        setSetupError(getApiErrorMessage(provider, error));
         setMessages((prev) => [
           ...prev,
           {
-            text: "That API key did not work. Please add a valid key to continue.",
+            text: getApiErrorMessage(provider, error),
             sender: "ai",
             error: true,
           },
@@ -423,13 +500,15 @@ function App() {
                 key={value}
                 type="button"
                 className={`provider-option ${provider === value ? "selected" : ""}`}
-                onClick={() => setProvider(value)}
+                onClick={() => {
+                  setProvider(value);
+                  setSetupError("");
+                }}
                 role="radio"
                 aria-checked={provider === value}
                 disabled={isSavingConfig}
               >
                 <span>{item.label}</span>
-                <small>{item.model}</small>
               </button>
             ))}
           </div>
@@ -441,13 +520,22 @@ function App() {
             id="setup-api-key"
             type="password"
             value={apiKeyInput}
-            onChange={(e) => setApiKeyInput(e.target.value)}
+            onChange={(e) => {
+              setApiKeyInput(e.target.value);
+              setSetupError("");
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && apiKeyInput.trim()) saveApiConfig();
             }}
             placeholder={activeProvider.keyPlaceholder}
             disabled={isSavingConfig}
           />
+
+          {setupError && (
+            <div className="setup-error" role="alert">
+              {setupError}
+            </div>
+          )}
 
           <div className="setup-actions">
             {apiKey && (
@@ -456,6 +544,7 @@ function App() {
                 className="key-btn"
                 onClick={() => {
                   setApiKeyInput(apiKey);
+                  setSetupError("");
                   setIsEditingConfig(false);
                 }}
                 disabled={isSavingConfig}
@@ -469,7 +558,7 @@ function App() {
               onClick={saveApiConfig}
               disabled={isSavingConfig || !apiKeyInput.trim()}
             >
-              Save and start chat
+              {isSavingConfig ? "Checking..." : "Save and start chat"}
             </button>
           </div>
         </main>
