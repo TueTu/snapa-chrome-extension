@@ -315,6 +315,7 @@ function App() {
   const [customPrompt, setCustomPrompt] = useState("");
   const [customTemplates, setCustomTemplates] = useState([]);
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
+  const [isProviderMenuOpen, setIsProviderMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -462,6 +463,7 @@ function App() {
   };
 
   const openConfirm = (action) => {
+    setIsProviderMenuOpen(false);
     setConfirmAction(action);
   };
 
@@ -759,6 +761,50 @@ function App() {
             {activeProvider.label} ready
           </span>
         </div>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="provider-icon-btn"
+            onClick={() => setIsProviderMenuOpen((isOpen) => !isOpen)}
+            aria-label="Manage provider"
+            aria-expanded={isProviderMenuOpen}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.91 10H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z" />
+            </svg>
+          </button>
+          {isProviderMenuOpen && (
+            <>
+              <button
+                type="button"
+                className="provider-menu-close-area"
+                onClick={() => setIsProviderMenuOpen(false)}
+                aria-label="Close provider menu"
+              />
+              <div className="provider-action-list" role="menu">
+                <button
+                  type="button"
+                  className="provider-action-item"
+                  onClick={() => openConfirm("change")}
+                  role="menuitem"
+                >
+                  <span>Change provider</span>
+                  <small>Use another API key</small>
+                </button>
+                <button
+                  type="button"
+                  className="provider-action-item danger"
+                  onClick={() => openConfirm("clear")}
+                  role="menuitem"
+                >
+                  <span>Clear saved key</span>
+                  <small>Return to setup</small>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         <button
           onClick={toggleTheme}
           className="theme-toggle"
@@ -801,16 +847,6 @@ function App() {
           )}
         </button>
       </header>
-
-      <section className="provider-bar" aria-label="AI provider settings">
-        <span>{activeProvider.label}</span>
-        <button type="button" className="link-btn" onClick={() => openConfirm("change")}>
-          Change
-        </button>
-        <button type="button" className="link-btn danger" onClick={() => openConfirm("clear")}>
-          Clear
-        </button>
-      </section>
 
       {confirmAction && (
         <div

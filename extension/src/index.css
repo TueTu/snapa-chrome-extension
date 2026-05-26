@@ -75,6 +75,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.5rem;
   z-index: 10;
 }
 
@@ -101,6 +102,41 @@ body {
 
 .key-status.ready {
   color: var(--success-color);
+}
+
+.header-actions {
+  position: relative;
+  margin-left: auto;
+}
+
+.provider-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.4rem;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  transition: all 0.2s ease;
+}
+
+.provider-icon-btn:hover {
+  background-color: var(--hover-overlay);
+  color: var(--text-color);
+}
+
+.provider-icon-btn svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .theme-toggle {
@@ -278,36 +314,59 @@ body {
   min-width: 150px;
 }
 
-.provider-bar {
-  min-height: 42px;
-  padding: 0.45rem 1.25rem;
-  border-top: 1px solid var(--border-color);
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-color);
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  color: var(--text-secondary);
-  font-size: 0.78rem;
-}
-
-.provider-bar span {
-  margin-right: auto;
-  color: var(--text-color);
-  font-weight: 700;
-}
-
-.link-btn {
+.provider-menu-close-area {
+  position: fixed;
+  inset: 0;
+  z-index: 18;
   border: none;
   background: transparent;
-  color: var(--primary-color);
-  cursor: pointer;
-  padding: 0.25rem 0;
-  font-size: 0.78rem;
-  font-weight: 700;
 }
 
-.link-btn.danger {
+.provider-action-list {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  z-index: 25;
+  width: 190px;
+  overflow: hidden;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border-color);
+  background: var(--input-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.provider-action-item {
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: none;
+  background: transparent;
+  color: var(--text-color);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  text-align: left;
+}
+
+.provider-action-item + .provider-action-item {
+  border-top: 1px solid var(--border-color);
+}
+
+.provider-action-item:hover {
+  background: var(--hover-overlay);
+}
+
+.provider-action-item span {
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.provider-action-item small {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.provider-action-item.danger span {
   color: #ef4444;
 }
 
