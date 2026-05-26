@@ -1,8 +1,23 @@
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import "./index.css";
 
-const API_KEY_STORAGE_KEY = "geminiApiKey";
-const MODEL_NAME = "gemini-1.5-flash";
+const API_CONFIG_STORAGE_KEY = "aiProviderConfig";
+const LEGACY_GEMINI_KEY = "geminiApiKey";
+
+const PROVIDERS = {
+  gemini: {
+    label: "Gemini",
+    keyLabel: "Gemini API key",
+    keyPlaceholder: "Paste your Gemini API key",
+    model: "gemini-1.5-flash",
+  },
+  openai: {
+    label: "OpenAI",
+    keyLabel: "OpenAI API key",
+    keyPlaceholder: "Paste your OpenAI API key",
+    model: "gpt-4o-mini",
+  },
+};
 
 const getChromeStorage = () =>
   typeof chrome !== "undefined" && chrome.storage?.local
@@ -47,9 +62,20 @@ const removeStoredValue = (key) =>
     resolve();
   });
 
+const normalizeProvider = (provider) =>
+  Object.keys(PROVIDERS).includes(provider) ? provider : "gemini";
+
+class ApiAuthError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ApiAuthError";
+  }
+}
+
 const callGemini = async (apiKey, message) => {
+  const model = PROVIDERS.gemini.model;
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
       headers: {
@@ -70,6 +96,12 @@ const callGemini = async (apiKey, message) => {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiAuthError(
+        data?.error?.message || "Your Gemini API key is missing or invalid.",
+      );
+    }
+
     throw new Error(
       data?.error?.message || `Gemini request failed (${response.status})`,
     );
@@ -83,14 +115,57 @@ const callGemini = async (apiKey, message) => {
   return reply || "Gemini returned an empty response.";
 };
 
+const callOpenAI = async (apiKey, message) => {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: PROVIDERS.openai.model,
+      messages: [{ role: "user", content: message }],
+    }),
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiAuthError(
+        data?.error?.message || "Your OpenAI API key is missing or invalid.",
+      );
+    }
+
+    throw new Error(
+      data?.error?.message || `OpenAI request failed (${response.status})`,
+    );
+  }
+
+  const reply = data?.choices?.[0]?.message?.content?.trim();
+
+  return reply || "OpenAI returned an empty response.";
+};
+
+const callProvider = (config, message) => {
+  if (config.provider === "openai") {
+    return callOpenAI(config.apiKey, message);
+  }
+
+  return callGemini(config.apiKey, message);
+};
+
 function App() {
   const [messages, setMessages] = useState([
-    { text: "Add your Gemini API key, then ask me anything.", sender: "ai" },
+    { text: "Ask me anything.", sender: "ai" },
   ]);
   const [input, setInput] = useState("");
+  const [provider, setProvider] = useState("gemini");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
-  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [isConfigLoaded, setIsConfigLoaded] = useState(false);
+  const [isEditingConfig, setIsEditingConfig] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -125,9 +200,36 @@ function App() {
   }, [messages]);
 
   useEffect(() => {
-    readStoredValue(API_KEY_STORAGE_KEY).then((storedApiKey) => {
-      setApiKey(storedApiKey);
-      setApiKeyInput(storedApiKey);
+    readStoredValue(API_CONFIG_STORAGE_KEY).then(async (storedConfigValue) => {
+      let nextConfig = null;
+
+      if (storedConfigValue) {
+        try {
+          nextConfig = JSON.parse(storedConfigValue);
+        } catch {
+          nextConfig = null;
+        }
+      }
+
+      if (!nextConfig?.apiKey) {
+        const legacyGeminiKey = await readStoredValue(LEGACY_GEMINI_KEY);
+        if (legacyGeminiKey) {
+          nextConfig = { provider: "gemini", apiKey: legacyGeminiKey };
+          await saveStoredValue(
+            API_CONFIG_STORAGE_KEY,
+            JSON.stringify(nextConfig),
+          );
+          await removeStoredValue(LEGACY_GEMINI_KEY);
+        }
+      }
+
+      const nextProvider = normalizeProvider(nextConfig?.provider);
+      const nextApiKey = nextConfig?.apiKey || "";
+
+      setProvider(nextProvider);
+      setApiKey(nextApiKey);
+      setApiKeyInput(nextApiKey);
+      setIsConfigLoaded(true);
     });
 
     // Check for selected text from context menu
@@ -146,21 +248,34 @@ function App() {
     }
   }, []);
 
-  const saveApiKey = async () => {
+  const saveApiConfig = async () => {
     const trimmedApiKey = apiKeyInput.trim();
 
-    setIsSavingKey(true);
-    await saveStoredValue(API_KEY_STORAGE_KEY, trimmedApiKey);
+    setIsSavingConfig(true);
+    await saveStoredValue(
+      API_CONFIG_STORAGE_KEY,
+      JSON.stringify({ provider, apiKey: trimmedApiKey }),
+    );
     setApiKey(trimmedApiKey);
-    setIsSavingKey(false);
+    setIsEditingConfig(false);
+    setMessages((prev) => [
+      ...prev,
+      {
+        text: `${PROVIDERS[provider].label} is ready. What do you want to ask?`,
+        sender: "ai",
+      },
+    ]);
+    setIsSavingConfig(false);
   };
 
-  const clearApiKey = async () => {
-    setIsSavingKey(true);
-    await removeStoredValue(API_KEY_STORAGE_KEY);
+  const clearApiConfig = async () => {
+    setIsSavingConfig(true);
+    await removeStoredValue(API_CONFIG_STORAGE_KEY);
+    await removeStoredValue(LEGACY_GEMINI_KEY);
     setApiKey("");
     setApiKeyInput("");
-    setIsSavingKey(false);
+    setIsEditingConfig(true);
+    setIsSavingConfig(false);
   };
 
   const sendMessage = async (textOverride = null) => {
@@ -171,7 +286,7 @@ function App() {
       setMessages((prev) => [
         ...prev,
         {
-          text: "Please save your Gemini API key before sending a message.",
+          text: "Please choose a provider and save your API key before sending a message.",
           sender: "ai",
           error: true,
         },
@@ -185,11 +300,29 @@ function App() {
     setIsLoading(true);
 
     try {
-      const finalText = await callGemini(apiKey, textToSend);
+      const finalText = await callProvider({ provider, apiKey }, textToSend);
       const aiMessage = { text: finalText, sender: "ai" };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error("Error:", error);
+
+      if (error instanceof ApiAuthError) {
+        await removeStoredValue(API_CONFIG_STORAGE_KEY);
+        await removeStoredValue(LEGACY_GEMINI_KEY);
+        setApiKey("");
+        setApiKeyInput("");
+        setIsEditingConfig(true);
+        setMessages((prev) => [
+          ...prev,
+          {
+            text: "That API key did not work. Please add a valid key to continue.",
+            sender: "ai",
+            error: true,
+          },
+        ]);
+        return;
+      }
+
       const errorMessage = error.message || "Sorry, something went wrong.";
       setMessages((prev) => [
         ...prev,
@@ -216,13 +349,141 @@ function App() {
     }
   };
 
+  const activeProvider = PROVIDERS[provider];
+  const shouldShowSetup = isConfigLoaded && (!apiKey || isEditingConfig);
+
+  if (!isConfigLoaded) {
+    return (
+      <div className="app-container">
+        <div className="loading-screen">Loading...</div>
+      </div>
+    );
+  }
+
+  if (shouldShowSetup) {
+    return (
+      <div className="app-container setup-screen">
+        <header className="chat-header">
+          <div className="header-content">
+            <h1>Snapa AI</h1>
+            <span className="key-status">Setup</span>
+          </div>
+          <button
+            onClick={toggleTheme}
+            className="theme-toggle"
+            aria-label="Toggle theme"
+          >
+            {theme === "light" ? (
+              <svg
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                stroke="currentColor"
+                strokeWidth="2"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+            ) : (
+              <svg
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                stroke="currentColor"
+                strokeWidth="2"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            )}
+          </button>
+        </header>
+
+        <main className="setup-panel" aria-label="API setup">
+          <div className="setup-copy">
+            <h2>Connect your AI provider</h2>
+            <p>Choose the API you want to use, then save your key to start chatting.</p>
+          </div>
+
+          <div className="provider-grid" role="radiogroup" aria-label="AI provider">
+            {Object.entries(PROVIDERS).map(([value, item]) => (
+              <button
+                key={value}
+                type="button"
+                className={`provider-option ${provider === value ? "selected" : ""}`}
+                onClick={() => setProvider(value)}
+                role="radio"
+                aria-checked={provider === value}
+                disabled={isSavingConfig}
+              >
+                <span>{item.label}</span>
+                <small>{item.model}</small>
+              </button>
+            ))}
+          </div>
+
+          <label className="setup-label" htmlFor="setup-api-key">
+            {activeProvider.keyLabel}
+          </label>
+          <input
+            id="setup-api-key"
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && apiKeyInput.trim()) saveApiConfig();
+            }}
+            placeholder={activeProvider.keyPlaceholder}
+            disabled={isSavingConfig}
+          />
+
+          <div className="setup-actions">
+            {apiKey && (
+              <button
+                type="button"
+                className="key-btn"
+                onClick={() => {
+                  setApiKeyInput(apiKey);
+                  setIsEditingConfig(false);
+                }}
+                disabled={isSavingConfig}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              className="key-btn primary setup-save"
+              onClick={saveApiConfig}
+              disabled={isSavingConfig || !apiKeyInput.trim()}
+            >
+              Save and start chat
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       <header className="chat-header">
         <div className="header-content">
           <h1>Snapa AI</h1>
           <span className={`key-status ${apiKey ? "ready" : ""}`}>
-            {apiKey ? "Key saved" : "No API key"}
+            {activeProvider.label} ready
           </span>
         </div>
         <button
@@ -268,34 +529,14 @@ function App() {
         </button>
       </header>
 
-      <section className="api-key-panel" aria-label="Gemini API key settings">
-        <label htmlFor="api-key">Gemini API key</label>
-        <div className="api-key-row">
-          <input
-            id="api-key"
-            type="password"
-            value={apiKeyInput}
-            onChange={(e) => setApiKeyInput(e.target.value)}
-            placeholder="Paste your Gemini API key"
-            disabled={isSavingKey}
-          />
-          <button
-            type="button"
-            className="key-btn primary"
-            onClick={saveApiKey}
-            disabled={isSavingKey || !apiKeyInput.trim()}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="key-btn"
-            onClick={clearApiKey}
-            disabled={isSavingKey || (!apiKey && !apiKeyInput)}
-          >
-            Clear
-          </button>
-        </div>
+      <section className="provider-bar" aria-label="AI provider settings">
+        <span>{activeProvider.label}</span>
+        <button type="button" className="link-btn" onClick={() => setIsEditingConfig(true)}>
+          Change
+        </button>
+        <button type="button" className="link-btn danger" onClick={clearApiConfig}>
+          Clear
+        </button>
       </section>
 
       <div className="chat-window">
