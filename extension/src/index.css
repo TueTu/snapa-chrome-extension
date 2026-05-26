@@ -52,9 +52,11 @@ body {
 }
 
 .app-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden;
 }
 
 .loading-screen {
@@ -164,6 +166,12 @@ body {
 .key-btn.primary {
   border-color: var(--primary-color);
   background: var(--primary-color);
+  color: white;
+}
+
+.key-btn.danger {
+  border-color: #ef4444;
+  background: #ef4444;
   color: white;
 }
 
@@ -301,6 +309,51 @@ body {
 
 .link-btn.danger {
   color: #ef4444;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgb(0 0 0 / 0.48);
+  backdrop-filter: blur(4px);
+}
+
+.confirm-dialog {
+  width: 100%;
+  max-width: 340px;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-color);
+  background: var(--bg-color);
+  color: var(--text-color);
+  box-shadow: var(--shadow-md);
+  padding: 1rem;
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 0.45rem;
+  color: var(--text-color);
+  font-size: 1rem;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
 }
 
 .chat-window {
