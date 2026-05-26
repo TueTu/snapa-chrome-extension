@@ -9,7 +9,12 @@ const PROVIDERS = {
     label: "Gemini",
     keyLabel: "Gemini API key",
     keyPlaceholder: "Paste your Gemini API key",
-    model: "gemini-1.5-flash",
+    preferredModels: [
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+    ],
   },
   openrouter: {
     label: "OpenRouter",
@@ -83,8 +88,84 @@ class ApiUsageError extends Error {
   }
 }
 
+const throwGeminiError = (response, data) => {
+  const errorCode = data?.error?.status || data?.error?.code || "";
+
+  if (response.status === 401 || response.status === 403) {
+    throw new ApiAuthError(
+      data?.error?.message || "Your Gemini API key is missing or invalid.",
+      response.status,
+      String(errorCode),
+    );
+  }
+
+  if (response.status === 429) {
+    throw new ApiUsageError(
+      data?.error?.message ||
+        "Your Gemini API key has reached its quota or rate limit.",
+      response.status,
+      String(errorCode),
+    );
+  }
+
+  throw new Error(
+    data?.error?.message || `Gemini request failed (${response.status})`,
+  );
+};
+
+const cleanGeminiModelName = (modelName) =>
+  String(modelName || "").replace(/^models\//, "");
+
+const getBestGeminiModel = async (apiKey) => {
+  const response = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models",
+    {
+      headers: {
+        "x-goog-api-key": apiKey,
+      },
+    },
+  );
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throwGeminiError(response, data);
+  }
+
+  const generateContentModels = (data?.models || []).filter((model) =>
+    model.supportedGenerationMethods?.includes("generateContent"),
+  );
+
+  const availableNames = generateContentModels.map((model) =>
+    cleanGeminiModelName(model.name),
+  );
+
+  const preferredModel = PROVIDERS.gemini.preferredModels.find((model) =>
+    availableNames.includes(model),
+  );
+
+  if (preferredModel) {
+    return preferredModel;
+  }
+
+  const fallbackModel = availableNames.find(
+    (model) =>
+      model.includes("gemini") &&
+      !model.includes("embedding") &&
+      !model.includes("aqa"),
+  );
+
+  if (fallbackModel) {
+    return fallbackModel;
+  }
+
+  throw new Error(
+    "This Gemini API key does not have access to a text generation model.",
+  );
+};
+
 const callGemini = async (apiKey, message) => {
-  const model = PROVIDERS.gemini.model;
+  const model = await getBestGeminiModel(apiKey);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
@@ -107,28 +188,7 @@ const callGemini = async (apiKey, message) => {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const errorCode = data?.error?.status || data?.error?.code || "";
-
-    if (response.status === 401 || response.status === 403) {
-      throw new ApiAuthError(
-        data?.error?.message || "Your Gemini API key is missing or invalid.",
-        response.status,
-        String(errorCode),
-      );
-    }
-
-    if (response.status === 429) {
-      throw new ApiUsageError(
-        data?.error?.message ||
-          "Your Gemini API key has reached its quota or rate limit.",
-        response.status,
-        String(errorCode),
-      );
-    }
-
-    throw new Error(
-      data?.error?.message || `Gemini request failed (${response.status})`,
-    );
+    throwGeminiError(response, data);
   }
 
   const reply = data?.candidates?.[0]?.content?.parts
