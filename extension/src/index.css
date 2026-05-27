@@ -220,34 +220,6 @@ body {
   color: var(--text-color);
 }
 
-.api-key-panel {
-  padding: 0.75rem 1.25rem 0.5rem;
-  border-top: 1px solid var(--border-color);
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-color);
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.api-key-panel label {
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.api-key-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.api-key-row input {
-  border-radius: 0.5rem;
-  padding: 0.625rem 0.75rem;
-}
-
 .key-btn {
   min-width: 48px;
   height: 36px;
