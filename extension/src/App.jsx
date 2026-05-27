@@ -4,8 +4,12 @@ import "./index.css";
 const API_CONFIG_STORAGE_KEY = "aiProviderConfig";
 const CUSTOM_TEMPLATES_STORAGE_KEY = "customTemplates";
 const CHAT_HISTORY_STORAGE_KEY = "chatHistory";
+const PAGE_CONTEXT_STORAGE_KEY = "pageContext";
 const LEGACY_GEMINI_KEY = "geminiApiKey";
 const MAX_SAVED_MESSAGES = 30;
+const PAGE_CONTEXT_TEXT_LIMIT = 12000;
+const PAGE_CONTEXT_SUMMARY_TRIGGER = 12000;
+const PAGE_CONTEXT_SUMMARY_INPUT_LIMIT = 18000;
 
 const DEFAULT_TEMPLATES = [
   { id: "summarize", label: "Summarize", instruction: "Summarize" },
@@ -318,6 +322,95 @@ const getSavedMessages = (messages) =>
     .filter((message) => !message.error)
     .slice(-MAX_SAVED_MESSAGES);
 
+const getActiveTab = () =>
+  new Promise((resolve, reject) => {
+    if (typeof chrome === "undefined" || !chrome.tabs?.query) {
+      reject(new Error("Page capture is only available inside Chrome."));
+      return;
+    }
+
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (chrome.runtime?.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+
+      if (!tab?.id) {
+        reject(new Error("No active tab found."));
+        return;
+      }
+
+      resolve(tab);
+    });
+  });
+
+const extractPageContentFromTab = async () => {
+  const tab = await getActiveTab();
+
+  if (!/^https?:\/\//.test(tab.url || "")) {
+    throw new Error("This page cannot be read. Open a normal web article and try again.");
+  }
+
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      const getMeta = (names) => {
+        for (const name of names) {
+          const selector = `meta[name="${name}"], meta[property="${name}"]`;
+          const value = document.querySelector(selector)?.getAttribute("content");
+          if (value) return value.trim();
+        }
+        return "";
+      };
+
+      const clone = document.body.cloneNode(true);
+      clone
+        .querySelectorAll("script, style, nav, footer, header, aside, form, noscript, svg")
+        .forEach((element) => element.remove());
+
+      const contentRoot =
+        clone.querySelector("article") ||
+        clone.querySelector("main") ||
+        clone.querySelector('[role="main"]') ||
+        clone;
+
+      const text = (contentRoot.innerText || "")
+        .replace(/\s+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+
+      return {
+        title:
+          getMeta(["og:title", "twitter:title"]) ||
+          document.title ||
+          "Untitled page",
+        author: getMeta(["author", "article:author", "byl", "parsely-author"]),
+        url: location.href,
+        text,
+      };
+    },
+  });
+
+  const page = result?.result;
+
+  if (!page?.text || page.text.length < 120) {
+    throw new Error("I could not find enough article text on this page.");
+  }
+
+  return page;
+};
+
+const buildPageContextPrompt = (pageContext, userQuestion) => {
+  if (!pageContext) return userQuestion;
+
+  const sourceText = pageContext.summary
+    ? `Article summary:\n${pageContext.summary}\n\nArticle excerpt:\n${pageContext.excerpt}`
+    : `Article text:\n${pageContext.excerpt}`;
+
+  return `Answer the user's question using the page context below. If the answer is not in the page, say that the page does not mention it.\n\nTitle: ${pageContext.title}\nAuthor: ${pageContext.author || "Unknown"}\nURL: ${pageContext.url}\n\n${sourceText}\n\nUser question:\n${userQuestion}`;
+};
+
 function App() {
   const [messages, setMessages] = useState([
     { text: "Ask me anything.", sender: "ai" },
@@ -337,6 +430,8 @@ function App() {
   const [customTemplates, setCustomTemplates] = useState([]);
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [isProviderMenuOpen, setIsProviderMenuOpen] = useState(false);
+  const [pageContext, setPageContext] = useState(null);
+  const [isPageContextLoading, setIsPageContextLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // Default to system preference or dark mode
   const [theme, setTheme] = useState(() => {
@@ -445,6 +540,23 @@ function App() {
       }
     });
 
+    readStoredValue(PAGE_CONTEXT_STORAGE_KEY).then((storedContext) => {
+      if (!storedContext) return;
+
+      try {
+        const parsedContext = JSON.parse(storedContext);
+        if (
+          typeof parsedContext?.title === "string" &&
+          typeof parsedContext?.url === "string" &&
+          typeof parsedContext?.excerpt === "string"
+        ) {
+          setPageContext(parsedContext);
+        }
+      } catch {
+        setPageContext(null);
+      }
+    });
+
     // Check for selected text from context menu
     if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get("selectedText", (data) => {
@@ -513,6 +625,11 @@ function App() {
     setIsSavingConfig(false);
   };
 
+  const savePageContext = async (nextContext) => {
+    setPageContext(nextContext);
+    await saveStoredValue(PAGE_CONTEXT_STORAGE_KEY, JSON.stringify(nextContext));
+  };
+
   const openConfirm = (action) => {
     setIsProviderMenuOpen(false);
     setConfirmAction(action);
@@ -557,6 +674,66 @@ function App() {
     }
   };
 
+  const useCurrentPage = async () => {
+    if (!apiKey) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: "Please save your API key before using page context.",
+          sender: "ai",
+          error: true,
+        },
+      ]);
+      return;
+    }
+
+    setIsProviderMenuOpen(false);
+    setIsPageContextLoading(true);
+
+    try {
+      const page = await extractPageContentFromTab();
+      const excerpt = page.text.slice(0, PAGE_CONTEXT_TEXT_LIMIT);
+      let summary = "";
+
+      if (page.text.length > PAGE_CONTEXT_SUMMARY_TRIGGER) {
+        summary = await callProvider(
+          { provider, apiKey },
+          `Summarize this article for question answering. Include the main claims, important names, dates, evidence, and conclusions. Keep it concise but specific.\n\nTitle: ${page.title}\nAuthor: ${page.author || "Unknown"}\nURL: ${page.url}\n\nArticle:\n${page.text.slice(0, PAGE_CONTEXT_SUMMARY_INPUT_LIMIT)}`,
+        );
+      }
+
+      const nextContext = {
+        title: page.title,
+        author: page.author,
+        url: page.url,
+        excerpt,
+        summary,
+        capturedAt: new Date().toISOString(),
+      };
+
+      await savePageContext(nextContext);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: `Now using this page: ${page.title}`,
+          sender: "ai",
+        },
+      ]);
+    } catch (error) {
+      console.error("Page capture failed:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: error.message || "I could not use this page.",
+          sender: "ai",
+          error: true,
+        },
+      ]);
+    } finally {
+      setIsPageContextLoading(false);
+    }
+  };
+
   const sendMessage = async (textOverride = null) => {
     const textToSend = typeof textOverride === "string" ? textOverride : input;
 
@@ -579,7 +756,8 @@ function App() {
     setIsLoading(true);
 
     try {
-      const finalText = await callProvider({ provider, apiKey }, textToSend);
+      const promptToSend = buildPageContextPrompt(pageContext, textToSend);
+      const finalText = await callProvider({ provider, apiKey }, promptToSend);
       const aiMessage = { text: finalText, sender: "ai" };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
@@ -857,6 +1035,16 @@ function App() {
                 <button
                   type="button"
                   className="provider-action-item"
+                  onClick={useCurrentPage}
+                  role="menuitem"
+                  disabled={isPageContextLoading}
+                >
+                  <span>{isPageContextLoading ? "Reading page..." : "Use this page"}</span>
+                  <small>Ask about current article</small>
+                </button>
+                <button
+                  type="button"
+                  className="provider-action-item"
                   onClick={() => openConfirm("change")}
                   role="menuitem"
                 >
@@ -1011,6 +1199,12 @@ function App() {
       )}
 
       <div className="chat-window">
+        {pageContext && (
+          <div className="page-context-pill" title={pageContext.url}>
+            <span>Using page</span>
+            <strong>{pageContext.title}</strong>
+          </div>
+        )}
         {messages.map((msg, index) => (
           <div
             key={index}
