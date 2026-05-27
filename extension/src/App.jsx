@@ -693,6 +693,7 @@ function App() {
       <div className="app-container setup-screen">
         <header className="chat-header">
           <div className="header-content">
+            <img className="app-logo" src="/icon.png" alt="" aria-hidden="true" />
             <h1>Snapa AI</h1>
             <span className="key-status">Setup</span>
           </div>
@@ -821,6 +822,7 @@ function App() {
     <div className="app-container">
       <header className="chat-header">
         <div className="header-content">
+          <img className="app-logo" src="/icon.png" alt="" aria-hidden="true" />
           <h1>Snapa AI</h1>
           <span className={`key-status ${apiKey ? "ready" : ""}`}>
             {activeProvider.label} ready
