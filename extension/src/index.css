@@ -67,7 +67,7 @@ body {
     linear-gradient(135deg, #f7faff 0%, #e9efff 46%, #dce9ff 100%),
     var(--bg-color);
   border: 1px solid var(--shell-border-color);
-  border-radius: 0.8rem;
+  border-radius: 0;
   box-shadow: var(--shell-shadow);
 }
 
@@ -580,14 +580,15 @@ body {
 
 .template-menu-btn {
   width: 100%;
-  min-height: 38px;
-  padding: 0.45rem 0.7rem;
-  border-radius: 0.72rem;
-  background-color: color-mix(in srgb, var(--input-bg) 88%, var(--bg-color) 12%);
+  min-height: 36px;
+  padding: 0.42rem 0.62rem 0.42rem 0.78rem;
+  border-radius: 9999px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--input-bg) 92%, white 8%), color-mix(in srgb, var(--input-bg) 82%, var(--bg-color) 18%));
   color: var(--text-color);
-  border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
-  font-size: 0.82rem;
-  font-weight: 650;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, var(--primary-color) 18%);
+  font-size: 0.8rem;
+  font-weight: 700;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -597,8 +598,8 @@ body {
 }
 
 .template-menu-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -608,8 +609,8 @@ body {
 
 .template-menu-btn:hover:not(:disabled),
 .template-menu-btn:focus {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px var(--shadow-sm);
+  border-color: color-mix(in srgb, var(--primary-color) 70%, var(--border-color) 30%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 16%, transparent);
 }
 
 .template-menu-btn:disabled {
@@ -624,35 +625,39 @@ body {
   bottom: calc(100% + 0.45rem);
   z-index: 30;
   overflow: hidden;
-  border: 1px solid var(--border-color);
-  border-radius: 0.5rem;
-  background: var(--input-bg);
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--primary-color) 22%);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--input-bg) 88%, var(--bg-color) 12%);
   box-shadow: var(--shadow-md);
+  padding: 0.32rem;
+  backdrop-filter: blur(14px);
 }
 
 .template-item,
 .template-add-row {
   width: 100%;
-  min-height: 36px;
-  padding: 0.55rem 0.85rem;
+  min-height: 34px;
+  padding: 0.5rem 0.65rem;
   border: none;
+  border-radius: 0.58rem;
   background: transparent;
   color: var(--text-color);
   cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: 0.8rem;
+  font-weight: 720;
   text-align: left;
 }
 
 .template-item:hover,
 .template-add-row:hover {
-  background: var(--hover-overlay);
+  background: color-mix(in srgb, var(--primary-color) 13%, transparent);
 }
 
 .template-custom-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) 32px;
   align-items: stretch;
+  border-radius: 0.58rem;
 }
 
 .template-item.custom {
@@ -664,6 +669,7 @@ body {
 
 .template-delete-btn {
   border: none;
+  border-radius: 0.5rem;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -679,8 +685,8 @@ body {
 
 .template-delete-btn svg,
 .template-add-row svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2.25;
@@ -688,7 +694,9 @@ body {
 }
 
 .template-add-row {
-  color: var(--primary-color);
+  margin-top: 0.24rem;
+  color: color-mix(in srgb, var(--primary-color) 88%, var(--text-color) 12%);
+  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -696,6 +704,7 @@ body {
 
 .template-divider {
   height: 1px;
+  margin: 0.22rem 0;
   background: var(--border-color);
 }
 
@@ -706,6 +715,30 @@ body {
   border: none;
   background: transparent;
   cursor: default;
+}
+
+[data-theme="dark"] .template-menu-btn {
+  background:
+    linear-gradient(180deg, rgba(24, 42, 72, 0.95), rgba(14, 28, 51, 0.96));
+  border-color: rgba(76, 123, 202, 0.34);
+}
+
+[data-theme="dark"] .template-menu {
+  background: rgba(12, 25, 48, 0.96);
+  border-color: rgba(76, 123, 202, 0.36);
+}
+
+[data-theme="dark"] .template-add-row {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+:root:not([data-theme="dark"]) .template-menu-btn {
+  box-shadow: 0 8px 18px rgb(100 128 174 / 0.09);
+}
+
+:root:not([data-theme="dark"]) .template-menu {
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 18px 34px rgb(100 128 174 / 0.18);
 }
 
 .input-wrapper {
