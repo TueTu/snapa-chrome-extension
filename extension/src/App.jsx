@@ -322,6 +322,19 @@ const getSavedMessages = (messages) =>
     .filter((message) => !message.error)
     .slice(-MAX_SAVED_MESSAGES);
 
+const formatMessageText = (text) =>
+  String(text)
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+-\s+(?=\S)/g, "\n\n• ")
+    .replace(/\s+•\s+(?=\S)/g, "\n\n• ")
+    .replace(/^- /, "• ")
+    .replace(/^•\s*/gm, "• ")
+    .replace(/\n• /g, "\n\n• ")
+    .replace(/\n{4,}/g, "\n\n")
+    .trim();
+
 const getActiveTab = () =>
   new Promise((resolve, reject) => {
     if (typeof chrome === "undefined" || !chrome.tabs?.query) {
@@ -401,14 +414,38 @@ const extractPageContentFromTab = async () => {
   return page;
 };
 
-const buildPageContextPrompt = (pageContext, userQuestion) => {
-  if (!pageContext) return userQuestion;
+const buildChatPrompt = ({ messages, pageContext, userQuestion }) => {
+  const recentConversation = normalizeMessages(messages)
+    .filter((message) => !message.error)
+    .slice(-10)
+    .map((message) => `${message.sender === "user" ? "User" : "Assistant"}: ${message.text}`)
+    .join("\n\n");
 
-  const sourceText = pageContext.summary
-    ? `Article summary:\n${pageContext.summary}\n\nArticle excerpt:\n${pageContext.excerpt}`
-    : `Article text:\n${pageContext.excerpt}`;
+  const pageText = pageContext
+    ? pageContext.summary
+      ? `Page context:\nTitle: ${pageContext.title}\nAuthor: ${pageContext.author || "Unknown"}\nURL: ${pageContext.url}\n\nArticle summary:\n${pageContext.summary}\n\nArticle excerpt:\n${pageContext.excerpt}`
+      : `Page context:\nTitle: ${pageContext.title}\nAuthor: ${pageContext.author || "Unknown"}\nURL: ${pageContext.url}\n\nArticle text:\n${pageContext.excerpt}`
+    : "";
 
-  return `Answer the user's question using the page context below. If the answer is not in the page, say that the page does not mention it.\n\nTitle: ${pageContext.title}\nAuthor: ${pageContext.author || "Unknown"}\nURL: ${pageContext.url}\n\n${sourceText}\n\nUser question:\n${userQuestion}`;
+  return `You are Snapa Chat.
+Answer in plain, precise, easy-to-read text.
+Use recent conversation to understand references like "that", "it", "above", or "this".
+If page context is provided, answer from that page. If the page does not mention it, say so.
+Format answers like this:
+Short answer first in 1-2 lines, maximum 25 words.
+Blank line.
+Use bullet lines with "•" when listing points.
+Each bullet must start on a new line.
+Add one blank line between bullet points.
+Never put multiple bullet points in one paragraph.
+Do not use "•" as an inline separator inside a sentence.
+Keep each bullet under 18 words.
+Blank line.
+Add one short closing line only if useful.
+Avoid long paragraphs and dense blocks.
+Do not use markdown bold markers like **.
+
+${recentConversation ? `Recent conversation:\n${recentConversation}\n\n` : ""}${pageText ? `${pageText}\n\n` : ""}User question:\n${userQuestion}`;
 };
 
 function App() {
@@ -756,7 +793,11 @@ function App() {
     setIsLoading(true);
 
     try {
-      const promptToSend = buildPageContextPrompt(pageContext, textToSend);
+      const promptToSend = buildChatPrompt({
+        messages,
+        pageContext,
+        userQuestion: textToSend,
+      });
       const finalText = await callProvider({ provider, apiKey }, promptToSend);
       const aiMessage = { text: finalText, sender: "ai" };
       setMessages((prev) => [...prev, aiMessage]);
@@ -1211,7 +1252,9 @@ function App() {
             className={`message ${msg.sender} ${msg.error ? "error" : ""}`}
           >
             <div className="message-content">
-              {typeof msg.text === 'object' ? JSON.stringify(msg.text) : msg.text}
+              {formatMessageText(
+                typeof msg.text === "object" ? JSON.stringify(msg.text) : msg.text,
+              )}
             </div>
           </div>
         ))}
