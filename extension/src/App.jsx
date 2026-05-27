@@ -10,9 +10,14 @@ const STORAGE_KEYS = {
 };
 
 const MAX_SAVED_MESSAGES = 30;
-const PAGE_TEXT_LIMIT = 12000;
-const PAGE_SUMMARY_TRIGGER = 12000;
-const PAGE_SUMMARY_INPUT_LIMIT = 18000;
+const PAGE_TEXT_LIMIT = 9000;
+const PAGE_PROMPT_LIMIT = 7000;
+const PAGE_SUMMARY_TRIGGER = 9000;
+const PAGE_SUMMARY_INPUT_LIMIT = 12000;
+const REQUEST_TIMEOUT_MS = 25000;
+const MODEL_TIMEOUT_MS = 10000;
+const CHAT_PROMPT_MESSAGE_LIMIT = 6;
+const CHAT_PROMPT_MESSAGE_TEXT_LIMIT = 700;
 
 const DEFAULT_MESSAGES = [{ text: "Ask me anything.", sender: "ai" }];
 
@@ -42,8 +47,19 @@ const PROVIDERS = {
     label: "OpenRouter",
     keyLabel: "OpenRouter API key",
     keyPlaceholder: "Paste your OpenRouter API key",
-    model: "openrouter/free",
+    fallbackModel: "google/gemini-2.0-flash-exp:free",
+    preferredModels: [
+      "google/gemini-2.0-flash-exp:free",
+      "google/gemini-flash-1.5-8b:free",
+      "meta-llama/llama-3.2-3b-instruct:free",
+      "mistralai/mistral-7b-instruct:free",
+    ],
   },
+};
+
+const modelCache = {
+  gemini: new Map(),
+  openrouter: new Map(),
 };
 
 const getStorage = () =>
@@ -116,6 +132,42 @@ class ApiUsageError extends Error {
 const normalizeProvider = (provider) =>
   Object.keys(PROVIDERS).includes(provider) ? provider : "gemini";
 
+const truncateText = (text, limit) => {
+  const value = String(text || "").trim();
+  return value.length > limit ? `${value.slice(0, limit).trim()}...` : value;
+};
+
+const normalizeUrlForContext = (url) => {
+  try {
+    const nextUrl = new URL(url);
+    nextUrl.hash = "";
+    return nextUrl.toString();
+  } catch {
+    return String(url || "");
+  }
+};
+
+const requestJson = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => null);
+    return { response, data };
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("The API request timed out. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
 const throwGeminiError = (response, data) => {
   const code = String(data?.error?.status || data?.error?.code || "");
 
@@ -139,10 +191,13 @@ const throwGeminiError = (response, data) => {
 };
 
 const getBestGeminiModel = async (apiKey) => {
-  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-    headers: { "x-goog-api-key": apiKey },
-  });
-  const data = await response.json().catch(() => null);
+  if (modelCache.gemini.has(apiKey)) return modelCache.gemini.get(apiKey);
+
+  const { response, data } = await requestJson(
+    "https://generativelanguage.googleapis.com/v1beta/models",
+    { headers: { "x-goog-api-key": apiKey } },
+    MODEL_TIMEOUT_MS,
+  );
 
   if (!response.ok) throwGeminiError(response, data);
 
@@ -150,23 +205,26 @@ const getBestGeminiModel = async (apiKey) => {
     .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
     .map((model) => String(model.name || "").replace(/^models\//, ""));
 
-  return (
+  const model =
     PROVIDERS.gemini.preferredModels.find((model) => availableModels.includes(model)) ||
     availableModels.find(
       (model) =>
         model.includes("gemini") &&
         !model.includes("embedding") &&
         !model.includes("aqa"),
-    ) ||
-    Promise.reject(
-      new Error("This Gemini API key does not have access to a text generation model."),
-    )
-  );
+    );
+
+  if (!model) {
+    throw new Error("This Gemini API key does not have access to a text generation model.");
+  }
+
+  modelCache.gemini.set(apiKey, model);
+  return model;
 };
 
-const callGemini = async (apiKey, message) => {
+const callGemini = async (apiKey, message, options = {}) => {
   const model = await getBestGeminiModel(apiKey);
-  const response = await fetch(
+  const { response, data } = await requestJson(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
@@ -176,10 +234,13 @@ const callGemini = async (apiKey, message) => {
       },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: message }] }],
+        generationConfig: {
+          temperature: options.temperature ?? 0.25,
+          maxOutputTokens: options.maxOutputTokens ?? 500,
+        },
       }),
     },
   );
-  const data = await response.json().catch(() => null);
 
   if (!response.ok) throwGeminiError(response, data);
 
@@ -191,8 +252,39 @@ const callGemini = async (apiKey, message) => {
   return reply || "Gemini returned an empty response.";
 };
 
-const callOpenRouter = async (apiKey, message) => {
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+const getBestOpenRouterModel = async (apiKey) => {
+  if (modelCache.openrouter.has(apiKey)) return modelCache.openrouter.get(apiKey);
+
+  try {
+    const { response, data } = await requestJson(
+      "https://openrouter.ai/api/v1/models",
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+      MODEL_TIMEOUT_MS,
+    );
+
+    if (response.ok) {
+      const availableModels = (data?.data || [])
+        .map((model) => String(model.id || ""))
+        .filter(Boolean);
+      const model =
+        PROVIDERS.openrouter.preferredModels.find((item) => availableModels.includes(item)) ||
+        availableModels.find((item) => item.endsWith(":free")) ||
+        PROVIDERS.openrouter.fallbackModel;
+
+      modelCache.openrouter.set(apiKey, model);
+      return model;
+    }
+  } catch (error) {
+    console.warn("OpenRouter model lookup failed:", error);
+  }
+
+  modelCache.openrouter.set(apiKey, PROVIDERS.openrouter.fallbackModel);
+  return PROVIDERS.openrouter.fallbackModel;
+};
+
+const callOpenRouter = async (apiKey, message, options = {}) => {
+  const model = await getBestOpenRouterModel(apiKey);
+  const { response, data } = await requestJson("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -201,11 +293,12 @@ const callOpenRouter = async (apiKey, message) => {
       "X-Title": "Snapa Chat",
     },
     body: JSON.stringify({
-      model: PROVIDERS.openrouter.model,
+      model,
       messages: [{ role: "user", content: message }],
+      temperature: options.temperature ?? 0.25,
+      max_tokens: options.maxOutputTokens ?? 500,
     }),
   });
-  const data = await response.json().catch(() => null);
 
   if (!response.ok) {
     const code = String(data?.error?.code || data?.error?.type || "");
@@ -235,8 +328,10 @@ const callOpenRouter = async (apiKey, message) => {
   return data?.choices?.[0]?.message?.content?.trim() || "OpenRouter returned an empty response.";
 };
 
-const callProvider = ({ provider, apiKey }, message) =>
-  provider === "openrouter" ? callOpenRouter(apiKey, message) : callGemini(apiKey, message);
+const callProvider = ({ provider, apiKey }, message, options = {}) =>
+  provider === "openrouter"
+    ? callOpenRouter(apiKey, message, options)
+    : callGemini(apiKey, message, options);
 
 const getApiErrorMessage = (provider, error) => {
   const providerName = PROVIDERS[provider]?.label || "API";
@@ -276,10 +371,12 @@ const formatMessageText = (text) =>
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+(\d+\.)\s+(?=\S)/g, "\n\n$1 ")
     .replace(/\s+-\s+(?=\S)/g, "\n\n- ")
     .replace(/\s+\u2022\s+(?=\S)/g, "\n\n- ")
     .replace(/^- /, "- ")
     .replace(/^\u2022\s*/gm, "- ")
+    .replace(/\n(\d+\.) /g, "\n\n$1 ")
     .replace(/\n- /g, "\n\n- ")
     .replace(/\n{4,}/g, "\n\n")
     .trim();
@@ -370,7 +467,17 @@ const createPageContext = async ({ provider, apiKey }) => {
   if (page.text.length > PAGE_SUMMARY_TRIGGER) {
     summary = await callProvider(
       { provider, apiKey },
-      `Summarize this article for question answering. Include main claims, names, dates, evidence, and conclusions.\n\nTitle: ${page.title}\nAuthor: ${page.author || "Unknown"}\nURL: ${page.url}\n\nArticle:\n${page.text.slice(0, PAGE_SUMMARY_INPUT_LIMIT)}`,
+      `Summarize this article for fast question answering.
+Use short ordered lines.
+Keep important names, dates, claims, evidence, and conclusions.
+
+Title: ${page.title}
+Author: ${page.author || "Unknown"}
+URL: ${page.url}
+
+Article:
+${page.text.slice(0, PAGE_SUMMARY_INPUT_LIMIT)}`,
+      { maxOutputTokens: 650 },
     );
   }
 
@@ -387,30 +494,53 @@ const createPageContext = async ({ provider, apiKey }) => {
 const buildChatPrompt = ({ messages, pageContext, userQuestion }) => {
   const recentConversation = normalizeMessages(messages)
     .filter((message) => !message.error)
-    .slice(-10)
-    .map((message) => `${message.sender === "user" ? "User" : "Assistant"}: ${message.text}`)
+    .slice(-CHAT_PROMPT_MESSAGE_LIMIT)
+    .map(
+      (message) =>
+        `${message.sender === "user" ? "User" : "Assistant"}: ${truncateText(
+          message.text,
+          CHAT_PROMPT_MESSAGE_TEXT_LIMIT,
+        )}`,
+    )
     .join("\n\n");
 
   const pageText = pageContext
     ? pageContext.summary
-      ? `Page context:\nTitle: ${pageContext.title}\nAuthor: ${pageContext.author || "Unknown"}\nURL: ${pageContext.url}\n\nArticle summary:\n${pageContext.summary}\n\nArticle excerpt:\n${pageContext.excerpt}`
-      : `Page context:\nTitle: ${pageContext.title}\nAuthor: ${pageContext.author || "Unknown"}\nURL: ${pageContext.url}\n\nArticle text:\n${pageContext.excerpt}`
+      ? `Page context:
+Title: ${pageContext.title}
+Author: ${pageContext.author || "Unknown"}
+URL: ${pageContext.url}
+
+Article summary:
+${truncateText(pageContext.summary, PAGE_PROMPT_LIMIT)}
+
+Article excerpt:
+${truncateText(pageContext.excerpt, 2500)}`
+      : `Page context:
+Title: ${pageContext.title}
+Author: ${pageContext.author || "Unknown"}
+URL: ${pageContext.url}
+
+Article text:
+${truncateText(pageContext.excerpt, PAGE_PROMPT_LIMIT)}`
     : "";
 
   return `You are Snapa Chat.
-Answer in plain, precise, easy-to-read text.
+Answer in plain, precise, fast-to-read text.
 Use recent conversation to understand references like "that", "it", "above", or "this".
 If page context is provided, answer from that page. If the page does not mention it, say so.
 Use this format:
-Short answer first in 1-2 lines, maximum 25 words.
+Short answer first, maximum 20 words.
 
-- Bullet point
+1. First point
 
-- Bullet point
+2. Second point
 
-- Bullet point
+3. Third point
 
-Keep bullets under 18 words.
+Use numbered order for steps, reasons, or lists.
+Put a blank line between each point.
+Keep each point under 18 words.
 Add one short closing line only if useful.
 Avoid long paragraphs, dense blocks, markdown tables, and markdown bold markers.
 
@@ -660,7 +790,11 @@ function App() {
     setSetupError("");
 
     try {
-      await callProvider({ provider, apiKey: trimmedApiKey }, "Reply with exactly: OK");
+      await callProvider(
+        { provider, apiKey: trimmedApiKey },
+        "Reply with exactly: OK",
+        { maxOutputTokens: 8 },
+      );
       await saveStoredValue(
         STORAGE_KEYS.apiConfig,
         JSON.stringify({ provider, apiKey: trimmedApiKey }),
@@ -769,12 +903,26 @@ function App() {
     setIsLoading(true);
 
     try {
+      let contextForPrompt = pageContext;
+      if (contextForPrompt) {
+        try {
+          const tab = await getActiveTab();
+          if (
+            normalizeUrlForContext(tab.url) !== normalizeUrlForContext(contextForPrompt.url)
+          ) {
+            contextForPrompt = null;
+          }
+        } catch {
+          contextForPrompt = pageContext;
+        }
+      }
+
       const prompt = buildChatPrompt({
         messages,
-        pageContext,
+        pageContext: contextForPrompt,
         userQuestion: textToSend,
       });
-      const reply = await callProvider({ provider, apiKey }, prompt);
+      const reply = await callProvider({ provider, apiKey }, prompt, { maxOutputTokens: 500 });
       setMessages((prev) => [...prev, { text: reply, sender: "ai" }]);
     } catch (error) {
       console.error("Error:", error);
