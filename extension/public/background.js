@@ -1,7 +1,7 @@
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "snapa-extension-action",
-    title: "Send to AI Chat",
+    title: "Send to Snapa Chat",
     contexts: ["selection", "page"]
   }, () => {
     // Ignore error if item already exists

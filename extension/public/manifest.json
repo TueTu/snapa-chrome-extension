@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "AI Chat Extension",
+  "name": "Snapa Chat",
   "version": "1.0",
-  "description": "A simple AI chat extension powered by the user's Gemini API key",
+  "description": "A simple AI chat extension powered by the user's API key",
   "action": {
     "default_popup": "index.html",
-    "default_title": "Chat with AI",
+    "default_title": "Snapa Chat",
     "default_icon": {
       "16": "icon.png",
       "48": "icon.png",
