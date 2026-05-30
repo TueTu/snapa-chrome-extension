@@ -19,6 +19,9 @@ const REQUEST_TIMEOUT_MS = 25000;
 const MODEL_TIMEOUT_MS = 10000;
 const CHAT_PROMPT_MESSAGE_LIMIT = 6;
 const CHAT_PROMPT_MESSAGE_TEXT_LIMIT = 700;
+const SHORT_ANSWER_TOKENS = 500;
+const MEDIUM_ANSWER_TOKENS = 900;
+const LONG_ANSWER_TOKENS = 1300;
 
 const DEFAULT_MESSAGES = [{ text: "Ask me anything.", sender: "ai" }];
 
@@ -576,12 +579,17 @@ Article text:
 ${truncateText(pageContext.excerpt, PAGE_PROMPT_LIMIT)}`
     : "";
 
+  const responseSettings = getResponseSettings(userQuestion);
+
   return `You are Snapa Chat.
 Answer in plain, precise, fast-to-read text.
 Use recent conversation to understand references like "that", "it", "above", or "this".
 If page context is provided, answer from that page. If the page does not mention it, say so.
-Use this format:
-Short answer first, maximum 20 words.
+Answer length:
+${responseSettings.instruction}
+
+Use this format when it fits the question:
+Short answer first.
 
 1. First point
 
@@ -589,13 +597,77 @@ Short answer first, maximum 20 words.
 
 3. Third point
 
-Use numbered order for steps, reasons, or lists.
-Put a blank line between each point.
-Keep each point under 18 words.
+Use numbered points for steps, reasons, examples, comparisons, or lists.
+Use short paragraphs for explanations that are not naturally a list.
+Put a blank line between points or paragraphs.
+For example requests, give 2 to 4 concrete examples with short explanations.
+If the user asks "what", infer they mean the previous answer unless context says otherwise.
+Keep each point clear, but do not make it so short that important context is missing.
+Every numbered point must be complete. Never output an empty number like "2." or "2".
 Add one short closing line only if useful.
 Avoid long paragraphs, dense blocks, markdown tables, and markdown bold markers.
 
 ${recentConversation ? `Recent conversation:\n${recentConversation}\n\n` : ""}${pageText ? `${pageText}\n\n` : ""}User question:\n${userQuestion}`;
+};
+
+const getResponseSettings = (question) => {
+  const value = String(question || "").trim().toLowerCase();
+  const wantsDetail =
+    /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|medium|long)\b/.test(
+      value,
+    );
+  const wantsBrief = /\b(short|brief|quick|summarize|summary|tldr|tl;dr)\b/.test(value);
+
+  if (wantsDetail && !wantsBrief) {
+    return {
+      maxOutputTokens: MEDIUM_ANSWER_TOKENS,
+      instruction:
+        "Use a medium answer: 4 to 8 short paragraphs or numbered points. Include examples when useful.",
+    };
+  }
+
+  if (value.length > 140) {
+    return {
+      maxOutputTokens: LONG_ANSWER_TOKENS,
+      instruction:
+        "Use a fuller answer: cover the important parts clearly, but keep paragraphs short.",
+    };
+  }
+
+  return {
+    maxOutputTokens: SHORT_ANSWER_TOKENS,
+    instruction:
+      "Use a concise answer: 2 to 5 short points or paragraphs, unless the user asks for more.",
+  };
+};
+
+const looksIncompleteReply = (reply) => {
+  const value = String(reply || "").trim();
+  if (!value) return true;
+  if (/(^|\n)\s*\d+\.?\s*$/.test(value)) return true;
+  if (/(^|\n)\s*[-\u2022]\s*$/.test(value)) return true;
+  return false;
+};
+
+const buildCompletionRetryPrompt = ({ firstReply, originalPrompt }) => `${originalPrompt}
+
+The previous answer was incomplete:
+${firstReply}
+
+Rewrite the answer from scratch.
+Give complete numbered points only.
+Do not end with an unfinished number, bullet, phrase, or comma.`;
+
+const getChatErrorMessage = (provider, error) => {
+  if (error instanceof ApiAuthError || error instanceof ApiUsageError) {
+    return getApiErrorMessage(provider, error);
+  }
+
+  if (error?.name === "TypeError") {
+    return "The AI request could not connect. Check your internet connection and try again.";
+  }
+
+  return error?.message || "The AI request failed. Please try again.";
 };
 
 const SunIcon = () => (
@@ -1040,14 +1112,35 @@ function App() {
         pageContext: contextForPrompt,
         userQuestion: textToSend,
       });
-      const reply = await callProvider({ provider, apiKey }, prompt, { maxOutputTokens: 500 });
+      const responseSettings = getResponseSettings(textToSend);
+      let reply = await callProvider(
+        { provider, apiKey },
+        prompt,
+        { maxOutputTokens: responseSettings.maxOutputTokens },
+      );
+      if (looksIncompleteReply(reply)) {
+        reply = await callProvider(
+          { provider, apiKey },
+          buildCompletionRetryPrompt({ firstReply: reply, originalPrompt: prompt }),
+          { maxOutputTokens: responseSettings.maxOutputTokens },
+        );
+      }
+
+      if (looksIncompleteReply(reply)) {
+        throw new Error("The AI returned an incomplete answer. Please try again.");
+      }
+
       setMessages((prev) => [...prev, { text: reply, sender: "ai" }]);
     } catch (error) {
       console.error("Error:", error);
 
       if (error instanceof ApiAuthError) {
-        await removeStoredValue(STORAGE_KEYS.apiConfig);
-        await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+        try {
+          await removeStoredValue(STORAGE_KEYS.apiConfig);
+          await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+        } catch (storageError) {
+          console.error("Failed to clear invalid API config:", storageError);
+        }
         setApiKey("");
         setApiKeyInput("");
         setIsEditingConfig(true);
@@ -1056,7 +1149,7 @@ function App() {
 
       setMessages((prev) => [
         ...prev,
-        { text: error.message || "Sorry, something went wrong.", sender: "ai", error: true },
+        { text: getChatErrorMessage(provider, error), sender: "ai", error: true },
       ]);
     } finally {
       setIsLoading(false);
