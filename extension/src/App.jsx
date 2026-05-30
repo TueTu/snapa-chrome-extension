@@ -408,20 +408,29 @@ const getSavedMessages = (messages) =>
     .filter((message) => !message.error)
     .slice(-MAX_SAVED_MESSAGES);
 
-const formatMessageText = (text) =>
-  String(text)
+const formatMessageText = (text) => {
+  const formatted = String(text)
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\s+(\d+\.)\s+(?=\S)/g, "\n\n$1 ")
+    .replace(/(^|[.!?:;])\s+([1-9]\d?\.)\s+(?=\S)/g, "$1\n\n$2 ")
+    .replace(/([.!?:;])\s+(-)\s+(?=\S)/g, "$1\n\n$2 ")
     .replace(/\s+-\s+(?=\S)/g, "\n\n- ")
     .replace(/\s+\u2022\s+(?=\S)/g, "\n\n- ")
     .replace(/^- /, "- ")
     .replace(/^\u2022\s*/gm, "- ")
-    .replace(/\n(\d+\.) /g, "\n\n$1 ")
-    .replace(/\n- /g, "\n\n- ")
+    .replace(/\n{1,}(\d+\.) /g, "\n\n$1 ")
+    .replace(/\n{1,}- /g, "\n\n- ")
     .replace(/\n{4,}/g, "\n\n")
     .trim();
+
+  return formatted.split("\n").map((line, index) => (
+    <span key={`${index}-${line}`}>
+      {index > 0 && <br />}
+      {line}
+    </span>
+  ));
+};
 
 const getActiveTab = () =>
   new Promise((resolve, reject) => {
