@@ -524,6 +524,7 @@ body {
   /* Shadow removed for flatter look per "neat" request inside messages or kept minimal? keeping minimal for separation */
   box-shadow: var(--shadow-sm); 
   word-wrap: break-word;
+  white-space: pre-line;
   position: relative;
 }
 
