@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   customTemplates: "customTemplates",
   legacyGeminiKey: "geminiApiKey",
   pageContext: "pageContext",
+  selectedText: "selectedText",
 };
 
 const MAX_SAVED_MESSAGES = 30;
@@ -18,6 +19,9 @@ const REQUEST_TIMEOUT_MS = 25000;
 const MODEL_TIMEOUT_MS = 10000;
 const CHAT_PROMPT_MESSAGE_LIMIT = 6;
 const CHAT_PROMPT_MESSAGE_TEXT_LIMIT = 700;
+const SHORT_ANSWER_TOKENS = 500;
+const MEDIUM_ANSWER_TOKENS = 900;
+const LONG_ANSWER_TOKENS = 1300;
 
 const DEFAULT_MESSAGES = [{ text: "Ask me anything.", sender: "ai" }];
 
@@ -67,39 +71,77 @@ const getStorage = () =>
     ? chrome.storage.local
     : null;
 
+const getRuntimeErrorMessage = () => chrome.runtime?.lastError?.message || "";
+
 const readStoredValue = (key) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const storage = getStorage();
     if (!storage) {
-      resolve(localStorage.getItem(key) || "");
+      try {
+        resolve(localStorage.getItem(key) || "");
+      } catch (error) {
+        reject(error);
+      }
       return;
     }
 
-    storage.get(key, (data) => resolve(data?.[key] || ""));
+    storage.get(key, (data) => {
+      const errorMessage = getRuntimeErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve(data?.[key] || "");
+    });
   });
 
 const saveStoredValue = (key, value) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const storage = getStorage();
     if (!storage) {
-      localStorage.setItem(key, value);
-      resolve();
+      try {
+        localStorage.setItem(key, value);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
       return;
     }
 
-    storage.set({ [key]: value }, resolve);
+    storage.set({ [key]: value }, () => {
+      const errorMessage = getRuntimeErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve();
+    });
   });
 
 const removeStoredValue = (key) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const storage = getStorage();
     if (!storage) {
-      localStorage.removeItem(key);
-      resolve();
+      try {
+        localStorage.removeItem(key);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
       return;
     }
 
-    storage.remove(key, resolve);
+    storage.remove(key, () => {
+      const errorMessage = getRuntimeErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve();
+    });
   });
 
 const parseJson = (value, fallback) => {
@@ -146,6 +188,9 @@ const normalizeUrlForContext = (url) => {
     return String(url || "");
   }
 };
+
+const isSameContextUrl = (firstUrl, secondUrl) =>
+  normalizeUrlForContext(firstUrl) === normalizeUrlForContext(secondUrl);
 
 const requestJson = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
   const controller = new AbortController();
@@ -366,20 +411,29 @@ const getSavedMessages = (messages) =>
     .filter((message) => !message.error)
     .slice(-MAX_SAVED_MESSAGES);
 
-const formatMessageText = (text) =>
-  String(text)
+const formatMessageText = (text) => {
+  const formatted = String(text)
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\s+(\d+\.)\s+(?=\S)/g, "\n\n$1 ")
+    .replace(/(^|[.!?:;])\s+([1-9]\d?\.)\s+(?=\S)/g, "$1\n\n$2 ")
+    .replace(/([.!?:;])\s+(-)\s+(?=\S)/g, "$1\n\n$2 ")
     .replace(/\s+-\s+(?=\S)/g, "\n\n- ")
     .replace(/\s+\u2022\s+(?=\S)/g, "\n\n- ")
     .replace(/^- /, "- ")
     .replace(/^\u2022\s*/gm, "- ")
-    .replace(/\n(\d+\.) /g, "\n\n$1 ")
-    .replace(/\n- /g, "\n\n- ")
+    .replace(/\n{1,}(\d+\.) /g, "\n\n$1 ")
+    .replace(/\n{1,}- /g, "\n\n- ")
     .replace(/\n{4,}/g, "\n\n")
     .trim();
+
+  return formatted.split("\n").map((line, index) => (
+    <span key={`${index}-${line}`}>
+      {index > 0 && <br />}
+      {line}
+    </span>
+  ));
+};
 
 const getActiveTab = () =>
   new Promise((resolve, reject) => {
@@ -525,12 +579,17 @@ Article text:
 ${truncateText(pageContext.excerpt, PAGE_PROMPT_LIMIT)}`
     : "";
 
+  const responseSettings = getResponseSettings(userQuestion);
+
   return `You are Snapa Chat.
 Answer in plain, precise, fast-to-read text.
 Use recent conversation to understand references like "that", "it", "above", or "this".
 If page context is provided, answer from that page. If the page does not mention it, say so.
-Use this format:
-Short answer first, maximum 20 words.
+Answer length:
+${responseSettings.instruction}
+
+Use this format when it fits the question:
+Short answer first.
 
 1. First point
 
@@ -538,13 +597,77 @@ Short answer first, maximum 20 words.
 
 3. Third point
 
-Use numbered order for steps, reasons, or lists.
-Put a blank line between each point.
-Keep each point under 18 words.
+Use numbered points for steps, reasons, examples, comparisons, or lists.
+Use short paragraphs for explanations that are not naturally a list.
+Put a blank line between points or paragraphs.
+For example requests, give 2 to 4 concrete examples with short explanations.
+If the user asks "what", infer they mean the previous answer unless context says otherwise.
+Keep each point clear, but do not make it so short that important context is missing.
+Every numbered point must be complete. Never output an empty number like "2." or "2".
 Add one short closing line only if useful.
 Avoid long paragraphs, dense blocks, markdown tables, and markdown bold markers.
 
 ${recentConversation ? `Recent conversation:\n${recentConversation}\n\n` : ""}${pageText ? `${pageText}\n\n` : ""}User question:\n${userQuestion}`;
+};
+
+const getResponseSettings = (question) => {
+  const value = String(question || "").trim().toLowerCase();
+  const wantsDetail =
+    /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|medium|long)\b/.test(
+      value,
+    );
+  const wantsBrief = /\b(short|brief|quick|summarize|summary|tldr|tl;dr)\b/.test(value);
+
+  if (wantsDetail && !wantsBrief) {
+    return {
+      maxOutputTokens: MEDIUM_ANSWER_TOKENS,
+      instruction:
+        "Use a medium answer: 4 to 8 short paragraphs or numbered points. Include examples when useful.",
+    };
+  }
+
+  if (value.length > 140) {
+    return {
+      maxOutputTokens: LONG_ANSWER_TOKENS,
+      instruction:
+        "Use a fuller answer: cover the important parts clearly, but keep paragraphs short.",
+    };
+  }
+
+  return {
+    maxOutputTokens: SHORT_ANSWER_TOKENS,
+    instruction:
+      "Use a concise answer: 2 to 5 short points or paragraphs, unless the user asks for more.",
+  };
+};
+
+const looksIncompleteReply = (reply) => {
+  const value = String(reply || "").trim();
+  if (!value) return true;
+  if (/(^|\n)\s*\d+\.?\s*$/.test(value)) return true;
+  if (/(^|\n)\s*[-\u2022]\s*$/.test(value)) return true;
+  return false;
+};
+
+const buildCompletionRetryPrompt = ({ firstReply, originalPrompt }) => `${originalPrompt}
+
+The previous answer was incomplete:
+${firstReply}
+
+Rewrite the answer from scratch.
+Give complete numbered points only.
+Do not end with an unfinished number, bullet, phrase, or comma.`;
+
+const getChatErrorMessage = (provider, error) => {
+  if (error instanceof ApiAuthError || error instanceof ApiUsageError) {
+    return getApiErrorMessage(provider, error);
+  }
+
+  if (error?.name === "TypeError") {
+    return "The AI request could not connect. Check your internet connection and try again.";
+  }
+
+  return error?.message || "The AI request failed. Please try again.";
 };
 
 const SunIcon = () => (
@@ -712,57 +835,62 @@ function App() {
 
   useEffect(() => {
     const loadInitialState = async () => {
-      const storedConfig = parseJson(await readStoredValue(STORAGE_KEYS.apiConfig), null);
-      let nextConfig = storedConfig;
+      try {
+        const storedConfig = parseJson(await readStoredValue(STORAGE_KEYS.apiConfig), null);
+        let nextConfig = storedConfig;
 
-      if (!nextConfig?.apiKey) {
-        const legacyGeminiKey = await readStoredValue(STORAGE_KEYS.legacyGeminiKey);
-        if (legacyGeminiKey) {
-          nextConfig = { provider: "gemini", apiKey: legacyGeminiKey };
-          await saveStoredValue(STORAGE_KEYS.apiConfig, JSON.stringify(nextConfig));
-          await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
-        }
-      }
-
-      setProvider(normalizeProvider(nextConfig?.provider));
-      setApiKey(nextConfig?.apiKey || "");
-      setApiKeyInput(nextConfig?.apiKey || "");
-      setIsConfigLoaded(true);
-
-      const history = parseJson(await readStoredValue(STORAGE_KEYS.chatHistory), []);
-      if (Array.isArray(history) && history.length > 0) {
-        setMessages(getSavedMessages(history));
-      }
-      setIsChatHistoryLoaded(true);
-
-      const templates = parseJson(await readStoredValue(STORAGE_KEYS.customTemplates), []);
-      if (Array.isArray(templates)) {
-        setCustomTemplates(
-          templates.filter(
-            (template) =>
-              typeof template?.id === "string" &&
-              typeof template?.label === "string" &&
-              typeof template?.instruction === "string",
-          ),
-        );
-      }
-
-      const context = parseJson(await readStoredValue(STORAGE_KEYS.pageContext), null);
-      if (
-        typeof context?.title === "string" &&
-        typeof context?.url === "string" &&
-        typeof context?.excerpt === "string"
-      ) {
-        setPageContext(context);
-      }
-
-      if (typeof chrome !== "undefined" && chrome.storage?.local) {
-        chrome.storage.local.get("selectedText", (data) => {
-          if (data?.selectedText) {
-            setInput(String(data.selectedText));
-            chrome.storage.local.remove("selectedText");
+        if (!nextConfig?.apiKey) {
+          const legacyGeminiKey = await readStoredValue(STORAGE_KEYS.legacyGeminiKey);
+          if (legacyGeminiKey) {
+            nextConfig = { provider: "gemini", apiKey: legacyGeminiKey };
+            await saveStoredValue(STORAGE_KEYS.apiConfig, JSON.stringify(nextConfig));
+            await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
           }
-        });
+        }
+
+        setProvider(normalizeProvider(nextConfig?.provider));
+        setApiKey(nextConfig?.apiKey || "");
+        setApiKeyInput(nextConfig?.apiKey || "");
+
+        const history = parseJson(await readStoredValue(STORAGE_KEYS.chatHistory), []);
+        if (Array.isArray(history) && history.length > 0) {
+          setMessages(getSavedMessages(history));
+        }
+
+        const templates = parseJson(await readStoredValue(STORAGE_KEYS.customTemplates), []);
+        if (Array.isArray(templates)) {
+          setCustomTemplates(
+            templates.filter(
+              (template) =>
+                typeof template?.id === "string" &&
+                typeof template?.label === "string" &&
+                typeof template?.instruction === "string",
+            ),
+          );
+        }
+
+        const context = parseJson(await readStoredValue(STORAGE_KEYS.pageContext), null);
+        if (
+          typeof context?.title === "string" &&
+          typeof context?.url === "string" &&
+          typeof context?.excerpt === "string"
+        ) {
+          setPageContext(context);
+        }
+
+        const selectedText = await readStoredValue(STORAGE_KEYS.selectedText);
+        if (selectedText) {
+          setInput(String(selectedText));
+          await removeStoredValue(STORAGE_KEYS.selectedText);
+        }
+      } catch (error) {
+        console.error("Failed to load saved extension state:", error);
+        setSetupError(
+          "Saved settings could not be loaded. Check Chrome extension storage and try again.",
+        );
+      } finally {
+        setIsConfigLoaded(true);
+        setIsChatHistoryLoaded(true);
       }
     };
 
@@ -771,18 +899,48 @@ function App() {
 
   useEffect(() => {
     if (!isChatHistoryLoaded) return;
-    saveStoredValue(STORAGE_KEYS.chatHistory, JSON.stringify(getSavedMessages(messages)));
+    saveStoredValue(STORAGE_KEYS.chatHistory, JSON.stringify(getSavedMessages(messages))).catch(
+      (error) => console.error("Failed to save chat history:", error),
+    );
   }, [isChatHistoryLoaded, messages]);
 
   const savePageContext = async (nextContext) => {
-    setPageContext(nextContext);
     await saveStoredValue(STORAGE_KEYS.pageContext, JSON.stringify(nextContext));
+    setPageContext(nextContext);
   };
 
   const saveCustomTemplates = async (nextTemplates) => {
-    setCustomTemplates(nextTemplates);
     await saveStoredValue(STORAGE_KEYS.customTemplates, JSON.stringify(nextTemplates));
+    setCustomTemplates(nextTemplates);
   };
+
+  const clearPageContext = async () => {
+    await removeStoredValue(STORAGE_KEYS.pageContext);
+    setPageContext(null);
+  };
+
+  useEffect(() => {
+    if (!pageContext || shouldShowSetup) return;
+
+    let isCancelled = false;
+
+    const clearIfPageChanged = async () => {
+      try {
+        const tab = await getActiveTab();
+        if (!isCancelled && !isSameContextUrl(tab.url, pageContext.url)) {
+          await clearPageContext();
+        }
+      } catch {
+        // Keep existing page context if Chrome cannot report the active tab.
+      }
+    };
+
+    clearIfPageChanged();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [pageContext, shouldShowSetup]);
 
   const saveApiConfig = async () => {
     const trimmedApiKey = apiKeyInput.trim();
@@ -795,6 +953,21 @@ function App() {
         "Reply with exactly: OK",
         { maxOutputTokens: 8 },
       );
+    } catch (error) {
+      console.error("API key validation failed:", error);
+      setSetupError(getApiErrorMessage(provider, error));
+      setApiKey("");
+      try {
+        await removeStoredValue(STORAGE_KEYS.apiConfig);
+        await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+      } catch (storageError) {
+        console.error("Failed to clear invalid API config:", storageError);
+      }
+      setIsSavingConfig(false);
+      return;
+    }
+
+    try {
       await saveStoredValue(
         STORAGE_KEYS.apiConfig,
         JSON.stringify({ provider, apiKey: trimmedApiKey }),
@@ -806,11 +979,9 @@ function App() {
         { text: `${PROVIDERS[provider].label} is ready. What do you want to ask?`, sender: "ai" },
       ]);
     } catch (error) {
-      console.error("API key validation failed:", error);
-      setSetupError(getApiErrorMessage(provider, error));
+      console.error("Failed to save API key:", error);
+      setSetupError("Chrome could not save this API key locally. Please try again.");
       setApiKey("");
-      await removeStoredValue(STORAGE_KEYS.apiConfig);
-      await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
     } finally {
       setIsSavingConfig(false);
     }
@@ -818,13 +989,19 @@ function App() {
 
   const clearApiConfig = async () => {
     setIsSavingConfig(true);
-    await removeStoredValue(STORAGE_KEYS.apiConfig);
-    await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
-    setApiKey("");
-    setApiKeyInput("");
-    setSetupError("");
-    setIsEditingConfig(true);
-    setIsSavingConfig(false);
+    try {
+      await removeStoredValue(STORAGE_KEYS.apiConfig);
+      await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+      setApiKey("");
+      setApiKeyInput("");
+      setSetupError("");
+      setIsEditingConfig(true);
+    } catch (error) {
+      console.error("Failed to clear API key:", error);
+      setSetupError("Chrome could not clear the saved API key. Please try again.");
+    } finally {
+      setIsSavingConfig(false);
+    }
   };
 
   const closeConfirm = () => {
@@ -847,8 +1024,20 @@ function App() {
     }
 
     if (confirmAction === "clear-chat") {
-      await removeStoredValue(STORAGE_KEYS.chatHistory);
-      setMessages(DEFAULT_MESSAGES);
+      try {
+        await removeStoredValue(STORAGE_KEYS.chatHistory);
+        setMessages(DEFAULT_MESSAGES);
+      } catch (error) {
+        console.error("Failed to clear chat history:", error);
+        setMessages((prev) => [
+          ...prev,
+          {
+            text: "Chrome could not clear the saved conversation. Please try again.",
+            sender: "ai",
+            error: true,
+          },
+        ]);
+      }
       setConfirmAction(null);
     }
   };
@@ -907,10 +1096,11 @@ function App() {
       if (contextForPrompt) {
         try {
           const tab = await getActiveTab();
-          if (
-            normalizeUrlForContext(tab.url) !== normalizeUrlForContext(contextForPrompt.url)
-          ) {
+          if (!isSameContextUrl(tab.url, contextForPrompt.url)) {
             contextForPrompt = null;
+            await clearPageContext().catch((error) => {
+              console.error("Failed to clear stale page context:", error);
+            });
           }
         } catch {
           contextForPrompt = pageContext;
@@ -922,14 +1112,35 @@ function App() {
         pageContext: contextForPrompt,
         userQuestion: textToSend,
       });
-      const reply = await callProvider({ provider, apiKey }, prompt, { maxOutputTokens: 500 });
+      const responseSettings = getResponseSettings(textToSend);
+      let reply = await callProvider(
+        { provider, apiKey },
+        prompt,
+        { maxOutputTokens: responseSettings.maxOutputTokens },
+      );
+      if (looksIncompleteReply(reply)) {
+        reply = await callProvider(
+          { provider, apiKey },
+          buildCompletionRetryPrompt({ firstReply: reply, originalPrompt: prompt }),
+          { maxOutputTokens: responseSettings.maxOutputTokens },
+        );
+      }
+
+      if (looksIncompleteReply(reply)) {
+        throw new Error("The AI returned an incomplete answer. Please try again.");
+      }
+
       setMessages((prev) => [...prev, { text: reply, sender: "ai" }]);
     } catch (error) {
       console.error("Error:", error);
 
       if (error instanceof ApiAuthError) {
-        await removeStoredValue(STORAGE_KEYS.apiConfig);
-        await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+        try {
+          await removeStoredValue(STORAGE_KEYS.apiConfig);
+          await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+        } catch (storageError) {
+          console.error("Failed to clear invalid API config:", storageError);
+        }
         setApiKey("");
         setApiKeyInput("");
         setIsEditingConfig(true);
@@ -938,7 +1149,7 @@ function App() {
 
       setMessages((prev) => [
         ...prev,
-        { text: error.message || "Sorry, something went wrong.", sender: "ai", error: true },
+        { text: getChatErrorMessage(provider, error), sender: "ai", error: true },
       ]);
     } finally {
       setIsLoading(false);
@@ -960,21 +1171,45 @@ function App() {
     const instruction = customPrompt.trim();
     if (!instruction) return;
 
-    await saveCustomTemplates([
-      ...customTemplates,
-      {
-        id: `custom-${Date.now()}`,
-        label: instruction.length > 34 ? `${instruction.slice(0, 31)}...` : instruction,
-        instruction,
-      },
-    ]);
-    setCustomPrompt("");
-    setIsCustomPromptOpen(false);
-    setIsTemplateMenuOpen(true);
+    try {
+      await saveCustomTemplates([
+        ...customTemplates,
+        {
+          id: `custom-${Date.now()}`,
+          label: instruction.length > 34 ? `${instruction.slice(0, 31)}...` : instruction,
+          instruction,
+        },
+      ]);
+      setCustomPrompt("");
+      setIsCustomPromptOpen(false);
+      setIsTemplateMenuOpen(true);
+    } catch (error) {
+      console.error("Failed to save custom instruction:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: "Chrome could not save that custom instruction. Please try again.",
+          sender: "ai",
+          error: true,
+        },
+      ]);
+    }
   };
 
   const deleteCustomTemplate = (templateId) =>
-    saveCustomTemplates(customTemplates.filter((template) => template.id !== templateId));
+    saveCustomTemplates(customTemplates.filter((template) => template.id !== templateId)).catch(
+      (error) => {
+        console.error("Failed to delete custom instruction:", error);
+        setMessages((prev) => [
+          ...prev,
+          {
+            text: "Chrome could not delete that custom instruction. Please try again.",
+            sender: "ai",
+            error: true,
+          },
+        ]);
+      },
+    );
 
   const confirmDetails =
     confirmAction === "clear"
