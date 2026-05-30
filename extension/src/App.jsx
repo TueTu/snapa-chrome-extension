@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   customTemplates: "customTemplates",
   legacyGeminiKey: "geminiApiKey",
   pageContext: "pageContext",
+  selectedText: "selectedText",
 };
 
 const MAX_SAVED_MESSAGES = 30;
@@ -67,39 +68,77 @@ const getStorage = () =>
     ? chrome.storage.local
     : null;
 
+const getRuntimeErrorMessage = () => chrome.runtime?.lastError?.message || "";
+
 const readStoredValue = (key) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const storage = getStorage();
     if (!storage) {
-      resolve(localStorage.getItem(key) || "");
+      try {
+        resolve(localStorage.getItem(key) || "");
+      } catch (error) {
+        reject(error);
+      }
       return;
     }
 
-    storage.get(key, (data) => resolve(data?.[key] || ""));
+    storage.get(key, (data) => {
+      const errorMessage = getRuntimeErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve(data?.[key] || "");
+    });
   });
 
 const saveStoredValue = (key, value) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const storage = getStorage();
     if (!storage) {
-      localStorage.setItem(key, value);
-      resolve();
+      try {
+        localStorage.setItem(key, value);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
       return;
     }
 
-    storage.set({ [key]: value }, resolve);
+    storage.set({ [key]: value }, () => {
+      const errorMessage = getRuntimeErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve();
+    });
   });
 
 const removeStoredValue = (key) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const storage = getStorage();
     if (!storage) {
-      localStorage.removeItem(key);
-      resolve();
+      try {
+        localStorage.removeItem(key);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
       return;
     }
 
-    storage.remove(key, resolve);
+    storage.remove(key, () => {
+      const errorMessage = getRuntimeErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve();
+    });
   });
 
 const parseJson = (value, fallback) => {
@@ -146,6 +185,9 @@ const normalizeUrlForContext = (url) => {
     return String(url || "");
   }
 };
+
+const isSameContextUrl = (firstUrl, secondUrl) =>
+  normalizeUrlForContext(firstUrl) === normalizeUrlForContext(secondUrl);
 
 const requestJson = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
   const controller = new AbortController();
@@ -712,57 +754,62 @@ function App() {
 
   useEffect(() => {
     const loadInitialState = async () => {
-      const storedConfig = parseJson(await readStoredValue(STORAGE_KEYS.apiConfig), null);
-      let nextConfig = storedConfig;
+      try {
+        const storedConfig = parseJson(await readStoredValue(STORAGE_KEYS.apiConfig), null);
+        let nextConfig = storedConfig;
 
-      if (!nextConfig?.apiKey) {
-        const legacyGeminiKey = await readStoredValue(STORAGE_KEYS.legacyGeminiKey);
-        if (legacyGeminiKey) {
-          nextConfig = { provider: "gemini", apiKey: legacyGeminiKey };
-          await saveStoredValue(STORAGE_KEYS.apiConfig, JSON.stringify(nextConfig));
-          await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
-        }
-      }
-
-      setProvider(normalizeProvider(nextConfig?.provider));
-      setApiKey(nextConfig?.apiKey || "");
-      setApiKeyInput(nextConfig?.apiKey || "");
-      setIsConfigLoaded(true);
-
-      const history = parseJson(await readStoredValue(STORAGE_KEYS.chatHistory), []);
-      if (Array.isArray(history) && history.length > 0) {
-        setMessages(getSavedMessages(history));
-      }
-      setIsChatHistoryLoaded(true);
-
-      const templates = parseJson(await readStoredValue(STORAGE_KEYS.customTemplates), []);
-      if (Array.isArray(templates)) {
-        setCustomTemplates(
-          templates.filter(
-            (template) =>
-              typeof template?.id === "string" &&
-              typeof template?.label === "string" &&
-              typeof template?.instruction === "string",
-          ),
-        );
-      }
-
-      const context = parseJson(await readStoredValue(STORAGE_KEYS.pageContext), null);
-      if (
-        typeof context?.title === "string" &&
-        typeof context?.url === "string" &&
-        typeof context?.excerpt === "string"
-      ) {
-        setPageContext(context);
-      }
-
-      if (typeof chrome !== "undefined" && chrome.storage?.local) {
-        chrome.storage.local.get("selectedText", (data) => {
-          if (data?.selectedText) {
-            setInput(String(data.selectedText));
-            chrome.storage.local.remove("selectedText");
+        if (!nextConfig?.apiKey) {
+          const legacyGeminiKey = await readStoredValue(STORAGE_KEYS.legacyGeminiKey);
+          if (legacyGeminiKey) {
+            nextConfig = { provider: "gemini", apiKey: legacyGeminiKey };
+            await saveStoredValue(STORAGE_KEYS.apiConfig, JSON.stringify(nextConfig));
+            await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
           }
-        });
+        }
+
+        setProvider(normalizeProvider(nextConfig?.provider));
+        setApiKey(nextConfig?.apiKey || "");
+        setApiKeyInput(nextConfig?.apiKey || "");
+
+        const history = parseJson(await readStoredValue(STORAGE_KEYS.chatHistory), []);
+        if (Array.isArray(history) && history.length > 0) {
+          setMessages(getSavedMessages(history));
+        }
+
+        const templates = parseJson(await readStoredValue(STORAGE_KEYS.customTemplates), []);
+        if (Array.isArray(templates)) {
+          setCustomTemplates(
+            templates.filter(
+              (template) =>
+                typeof template?.id === "string" &&
+                typeof template?.label === "string" &&
+                typeof template?.instruction === "string",
+            ),
+          );
+        }
+
+        const context = parseJson(await readStoredValue(STORAGE_KEYS.pageContext), null);
+        if (
+          typeof context?.title === "string" &&
+          typeof context?.url === "string" &&
+          typeof context?.excerpt === "string"
+        ) {
+          setPageContext(context);
+        }
+
+        const selectedText = await readStoredValue(STORAGE_KEYS.selectedText);
+        if (selectedText) {
+          setInput(String(selectedText));
+          await removeStoredValue(STORAGE_KEYS.selectedText);
+        }
+      } catch (error) {
+        console.error("Failed to load saved extension state:", error);
+        setSetupError(
+          "Saved settings could not be loaded. Check Chrome extension storage and try again.",
+        );
+      } finally {
+        setIsConfigLoaded(true);
+        setIsChatHistoryLoaded(true);
       }
     };
 
@@ -771,18 +818,48 @@ function App() {
 
   useEffect(() => {
     if (!isChatHistoryLoaded) return;
-    saveStoredValue(STORAGE_KEYS.chatHistory, JSON.stringify(getSavedMessages(messages)));
+    saveStoredValue(STORAGE_KEYS.chatHistory, JSON.stringify(getSavedMessages(messages))).catch(
+      (error) => console.error("Failed to save chat history:", error),
+    );
   }, [isChatHistoryLoaded, messages]);
 
   const savePageContext = async (nextContext) => {
-    setPageContext(nextContext);
     await saveStoredValue(STORAGE_KEYS.pageContext, JSON.stringify(nextContext));
+    setPageContext(nextContext);
   };
 
   const saveCustomTemplates = async (nextTemplates) => {
-    setCustomTemplates(nextTemplates);
     await saveStoredValue(STORAGE_KEYS.customTemplates, JSON.stringify(nextTemplates));
+    setCustomTemplates(nextTemplates);
   };
+
+  const clearPageContext = async () => {
+    await removeStoredValue(STORAGE_KEYS.pageContext);
+    setPageContext(null);
+  };
+
+  useEffect(() => {
+    if (!pageContext || shouldShowSetup) return;
+
+    let isCancelled = false;
+
+    const clearIfPageChanged = async () => {
+      try {
+        const tab = await getActiveTab();
+        if (!isCancelled && !isSameContextUrl(tab.url, pageContext.url)) {
+          await clearPageContext();
+        }
+      } catch {
+        // Keep existing page context if Chrome cannot report the active tab.
+      }
+    };
+
+    clearIfPageChanged();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [pageContext, shouldShowSetup]);
 
   const saveApiConfig = async () => {
     const trimmedApiKey = apiKeyInput.trim();
@@ -795,6 +872,21 @@ function App() {
         "Reply with exactly: OK",
         { maxOutputTokens: 8 },
       );
+    } catch (error) {
+      console.error("API key validation failed:", error);
+      setSetupError(getApiErrorMessage(provider, error));
+      setApiKey("");
+      try {
+        await removeStoredValue(STORAGE_KEYS.apiConfig);
+        await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+      } catch (storageError) {
+        console.error("Failed to clear invalid API config:", storageError);
+      }
+      setIsSavingConfig(false);
+      return;
+    }
+
+    try {
       await saveStoredValue(
         STORAGE_KEYS.apiConfig,
         JSON.stringify({ provider, apiKey: trimmedApiKey }),
@@ -806,11 +898,9 @@ function App() {
         { text: `${PROVIDERS[provider].label} is ready. What do you want to ask?`, sender: "ai" },
       ]);
     } catch (error) {
-      console.error("API key validation failed:", error);
-      setSetupError(getApiErrorMessage(provider, error));
+      console.error("Failed to save API key:", error);
+      setSetupError("Chrome could not save this API key locally. Please try again.");
       setApiKey("");
-      await removeStoredValue(STORAGE_KEYS.apiConfig);
-      await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
     } finally {
       setIsSavingConfig(false);
     }
@@ -818,13 +908,19 @@ function App() {
 
   const clearApiConfig = async () => {
     setIsSavingConfig(true);
-    await removeStoredValue(STORAGE_KEYS.apiConfig);
-    await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
-    setApiKey("");
-    setApiKeyInput("");
-    setSetupError("");
-    setIsEditingConfig(true);
-    setIsSavingConfig(false);
+    try {
+      await removeStoredValue(STORAGE_KEYS.apiConfig);
+      await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
+      setApiKey("");
+      setApiKeyInput("");
+      setSetupError("");
+      setIsEditingConfig(true);
+    } catch (error) {
+      console.error("Failed to clear API key:", error);
+      setSetupError("Chrome could not clear the saved API key. Please try again.");
+    } finally {
+      setIsSavingConfig(false);
+    }
   };
 
   const closeConfirm = () => {
@@ -847,8 +943,20 @@ function App() {
     }
 
     if (confirmAction === "clear-chat") {
-      await removeStoredValue(STORAGE_KEYS.chatHistory);
-      setMessages(DEFAULT_MESSAGES);
+      try {
+        await removeStoredValue(STORAGE_KEYS.chatHistory);
+        setMessages(DEFAULT_MESSAGES);
+      } catch (error) {
+        console.error("Failed to clear chat history:", error);
+        setMessages((prev) => [
+          ...prev,
+          {
+            text: "Chrome could not clear the saved conversation. Please try again.",
+            sender: "ai",
+            error: true,
+          },
+        ]);
+      }
       setConfirmAction(null);
     }
   };
@@ -907,10 +1015,11 @@ function App() {
       if (contextForPrompt) {
         try {
           const tab = await getActiveTab();
-          if (
-            normalizeUrlForContext(tab.url) !== normalizeUrlForContext(contextForPrompt.url)
-          ) {
+          if (!isSameContextUrl(tab.url, contextForPrompt.url)) {
             contextForPrompt = null;
+            await clearPageContext().catch((error) => {
+              console.error("Failed to clear stale page context:", error);
+            });
           }
         } catch {
           contextForPrompt = pageContext;
@@ -960,21 +1069,45 @@ function App() {
     const instruction = customPrompt.trim();
     if (!instruction) return;
 
-    await saveCustomTemplates([
-      ...customTemplates,
-      {
-        id: `custom-${Date.now()}`,
-        label: instruction.length > 34 ? `${instruction.slice(0, 31)}...` : instruction,
-        instruction,
-      },
-    ]);
-    setCustomPrompt("");
-    setIsCustomPromptOpen(false);
-    setIsTemplateMenuOpen(true);
+    try {
+      await saveCustomTemplates([
+        ...customTemplates,
+        {
+          id: `custom-${Date.now()}`,
+          label: instruction.length > 34 ? `${instruction.slice(0, 31)}...` : instruction,
+          instruction,
+        },
+      ]);
+      setCustomPrompt("");
+      setIsCustomPromptOpen(false);
+      setIsTemplateMenuOpen(true);
+    } catch (error) {
+      console.error("Failed to save custom instruction:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: "Chrome could not save that custom instruction. Please try again.",
+          sender: "ai",
+          error: true,
+        },
+      ]);
+    }
   };
 
   const deleteCustomTemplate = (templateId) =>
-    saveCustomTemplates(customTemplates.filter((template) => template.id !== templateId));
+    saveCustomTemplates(customTemplates.filter((template) => template.id !== templateId)).catch(
+      (error) => {
+        console.error("Failed to delete custom instruction:", error);
+        setMessages((prev) => [
+          ...prev,
+          {
+            text: "Chrome could not delete that custom instruction. Please try again.",
+            sender: "ai",
+            error: true,
+          },
+        ]);
+      },
+    );
 
   const confirmDetails =
     confirmAction === "clear"
