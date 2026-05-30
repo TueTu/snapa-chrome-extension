@@ -16,6 +16,30 @@ const createChatWindow = () => {
   });
 };
 
+const saveSelectedText = (selectedText) =>
+  new Promise((resolve, reject) => {
+    chrome.storage.local.set({ selectedText }, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+
+      resolve();
+    });
+  });
+
+const openChat = () => {
+  if (!chrome.action.openPopup) {
+    createChatWindow();
+    return;
+  }
+
+  chrome.action.openPopup().catch((error) => {
+    console.error("Failed to open popup:", error);
+    createChatWindow();
+  });
+};
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create(
     {
@@ -29,18 +53,14 @@ chrome.runtime.onInstalled.addListener(() => {
   );
 });
 
-chrome.contextMenus.onClicked.addListener((info) => {
+chrome.contextMenus.onClicked.addListener(async (info) => {
   if (info.menuItemId !== CONTEXT_MENU_ID) return;
 
-  chrome.storage.local.set({ selectedText: trimSelectedText(info.selectionText) });
-
-  if (!chrome.action.openPopup) {
-    createChatWindow();
-    return;
+  try {
+    await saveSelectedText(trimSelectedText(info.selectionText));
+  } catch (error) {
+    console.error("Failed to save selected text:", error);
   }
 
-  chrome.action.openPopup().catch((error) => {
-    console.error("Failed to open popup:", error);
-    createChatWindow();
-  });
+  openChat();
 });
