@@ -15,6 +15,7 @@ React/Vite Chrome extension that lets each user chat with Gemini or OpenRouter u
 
 - The API key is saved locally in the browser extension's storage. Do not claim that it is encrypted.
 - The extension needs `activeTab` and `scripting` so it can read the current page only after the user invokes the extension.
+- Publish or link the privacy policy in [PRIVACY.md](./PRIVACY.md) before submitting to the Chrome Web Store.
 - Test a fresh install, invalid API key, provider quota/rate limit, restricted Chrome page, context-menu selection, and switching tabs after using page context before publishing.
 
 ## Development
@@ -26,11 +27,11 @@ npm install
 npm run build
 ```
 
-Load the generated `dist` folder in Chrome:
+Load the generated `dist-release` folder in Chrome:
 
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose "Load unpacked".
-4. Select `extension/dist`.
+4. Select `extension/dist-release`.
 
 Node.js is only needed for development/build commands. Users do not need a Node server running for the extension to work.
