@@ -64,6 +64,7 @@ const PROVIDERS = {
 const modelCache = {
   gemini: new Map(),
   openrouter: new Map(),
+  openrouterCandidates: new Map(),
 };
 
 const getStorage = () =>
@@ -235,6 +236,17 @@ const throwGeminiError = (response, data) => {
   throw new Error(data?.error?.message || `Gemini request failed (${response.status})`);
 };
 
+const getProviderErrorMessage = (data, fallback) => {
+  const error = data?.error || {};
+  return (
+    error.message ||
+    error.metadata?.raw ||
+    error.metadata?.reason ||
+    data?.message ||
+    fallback
+  );
+};
+
 const getBestGeminiModel = async (apiKey) => {
   if (modelCache.gemini.has(apiKey)) return modelCache.gemini.get(apiKey);
 
@@ -297,8 +309,10 @@ const callGemini = async (apiKey, message, options = {}) => {
   return reply || "Gemini returned an empty response.";
 };
 
-const getBestOpenRouterModel = async (apiKey) => {
-  if (modelCache.openrouter.has(apiKey)) return modelCache.openrouter.get(apiKey);
+const getOpenRouterModelCandidates = async (apiKey) => {
+  if (modelCache.openrouterCandidates.has(apiKey)) {
+    return modelCache.openrouterCandidates.get(apiKey);
+  }
 
   try {
     const { response, data } = await requestJson(
@@ -311,24 +325,54 @@ const getBestOpenRouterModel = async (apiKey) => {
       const availableModels = (data?.data || [])
         .map((model) => String(model.id || ""))
         .filter(Boolean);
-      const model =
-        PROVIDERS.openrouter.preferredModels.find((item) => availableModels.includes(item)) ||
-        availableModels.find((item) => item.endsWith(":free")) ||
-        PROVIDERS.openrouter.fallbackModel;
+      const models = [
+        ...PROVIDERS.openrouter.preferredModels.filter((item) => availableModels.includes(item)),
+        ...availableModels.filter((item) => item.endsWith(":free")),
+        PROVIDERS.openrouter.fallbackModel,
+      ].filter((model, index, list) => model && list.indexOf(model) === index);
 
-      modelCache.openrouter.set(apiKey, model);
-      return model;
+      modelCache.openrouterCandidates.set(apiKey, models);
+      return models;
     }
   } catch (error) {
     console.warn("OpenRouter model lookup failed:", error);
   }
 
-  modelCache.openrouter.set(apiKey, PROVIDERS.openrouter.fallbackModel);
-  return PROVIDERS.openrouter.fallbackModel;
+  const fallbackModels = [PROVIDERS.openrouter.fallbackModel];
+  modelCache.openrouterCandidates.set(apiKey, fallbackModels);
+  return fallbackModels;
 };
 
-const callOpenRouter = async (apiKey, message, options = {}) => {
-  const model = await getBestOpenRouterModel(apiKey);
+const createOpenRouterError = (response, data) => {
+  const code = String(data?.error?.code || data?.error?.type || "");
+  const message = getProviderErrorMessage(data, `OpenRouter request failed (${response.status})`);
+
+  if (response.status === 401 || response.status === 403) {
+    return new ApiAuthError(
+      message || "Your OpenRouter API key is missing or invalid.",
+      response.status,
+      code,
+    );
+  }
+
+  if (
+    response.status === 429 ||
+    response.status >= 500 ||
+    code === "insufficient_quota" ||
+    code === "billing_not_active" ||
+    /provider returned error/i.test(message)
+  ) {
+    return new ApiUsageError(
+      message || "Your OpenRouter API key has reached its quota or rate limit.",
+      response.status,
+      code,
+    );
+  }
+
+  return new Error(message);
+};
+
+const callOpenRouterModel = async (apiKey, model, message, options = {}) => {
   const { response, data } = await requestJson("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -346,31 +390,34 @@ const callOpenRouter = async (apiKey, message, options = {}) => {
   });
 
   if (!response.ok) {
-    const code = String(data?.error?.code || data?.error?.type || "");
-    if (response.status === 401 || response.status === 403) {
-      throw new ApiAuthError(
-        data?.error?.message || "Your OpenRouter API key is missing or invalid.",
-        response.status,
-        code,
-      );
-    }
-
-    if (
-      response.status === 429 ||
-      code === "insufficient_quota" ||
-      code === "billing_not_active"
-    ) {
-      throw new ApiUsageError(
-        data?.error?.message || "Your OpenRouter API key has reached its quota or rate limit.",
-        response.status,
-        code,
-      );
-    }
-
-    throw new Error(data?.error?.message || `OpenRouter request failed (${response.status})`);
+    throw createOpenRouterError(response, data);
   }
 
   return data?.choices?.[0]?.message?.content?.trim() || "OpenRouter returned an empty response.";
+};
+
+const callOpenRouter = async (apiKey, message, options = {}) => {
+  const cachedModel = modelCache.openrouter.get(apiKey);
+  const candidateModels = cachedModel
+    ? [cachedModel]
+    : await getOpenRouterModelCandidates(apiKey);
+  let lastError = null;
+
+  for (const model of candidateModels) {
+    try {
+      const reply = await callOpenRouterModel(apiKey, model, message, options);
+      modelCache.openrouter.set(apiKey, model);
+      return reply;
+    } catch (error) {
+      lastError = error;
+      if (error instanceof ApiAuthError || model === candidateModels.at(-1)) {
+        throw error;
+      }
+      console.warn(`OpenRouter model ${model} failed, trying another model:`, error);
+    }
+  }
+
+  throw lastError || new Error("OpenRouter request failed.");
 };
 
 const callProvider = ({ provider, apiKey }, message, options = {}) =>
