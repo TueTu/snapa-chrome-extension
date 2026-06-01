@@ -634,21 +634,12 @@ If page context is provided, answer from that page. If the page does not mention
 Answer length:
 ${responseSettings.instruction}
 
-Use this format when it fits the question:
-Short answer first.
-
-1. First point
-
-2. Second point
-
-3. Third point
-
-Use numbered points for steps, reasons, examples, comparisons, or lists.
-Use short paragraphs for explanations that are not naturally a list.
+Use numbered points only when the user asks for steps, reasons, examples, comparisons, pros and cons, or a list.
+For simple definitions, meanings, translations, or quick facts, use one or two short plain paragraphs without numbers.
 Put a blank line between points or paragraphs.
 For example requests, give 2 to 4 concrete examples with short explanations.
 If the user asks "what", infer they mean the previous answer unless context says otherwise.
-Keep each point clear, but do not make it so short that important context is missing.
+Keep each answer clear, but do not make it so short that important context is missing.
 Every numbered point must be complete. Never output an empty number like "2." or "2".
 Add one short closing line only if useful.
 Avoid long paragraphs, dense blocks, markdown tables, and markdown bold markers.
@@ -668,7 +659,7 @@ const getResponseSettings = (question) => {
     return {
       maxOutputTokens: MEDIUM_ANSWER_TOKENS,
       instruction:
-        "Use a medium answer: 4 to 8 short paragraphs or numbered points. Include examples when useful.",
+        "Use a medium answer: 4 to 8 short paragraphs, or numbered points only if the question needs a list.",
     };
   }
 
@@ -683,7 +674,7 @@ const getResponseSettings = (question) => {
   return {
     maxOutputTokens: SHORT_ANSWER_TOKENS,
     instruction:
-      "Use a concise answer: 2 to 5 short points or paragraphs, unless the user asks for more.",
+      "Use a concise answer: 1 to 2 short paragraphs, unless the user asks for a list or more detail.",
   };
 };
 
@@ -701,7 +692,7 @@ The previous answer was incomplete:
 ${firstReply}
 
 Rewrite the answer from scratch.
-Give complete numbered points only.
+Use plain paragraphs unless the original question asks for a list.
 Do not end with an unfinished number, bullet, phrase, or comma.`;
 
 const getChatErrorMessage = (provider, error) => {
