@@ -861,6 +861,7 @@ function App() {
   });
 
   const messagesEndRef = useRef(null);
+  const chatWindowRef = useRef(null);
   const inputRef = useRef(null);
   const providerMenuRef = useRef(null);
 
@@ -872,9 +873,28 @@ function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
+  const scrollToLatestMessage = (behavior = "smooth") => {
+    const chatWindow = chatWindowRef.current;
+    if (!chatWindow) return;
+
+    chatWindow.scrollTo({
+      top: chatWindow.scrollHeight,
+      behavior,
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (shouldShowSetup || !isChatHistoryLoaded) return;
+
+    scrollToLatestMessage("auto");
+    const frameId = requestAnimationFrame(() => scrollToLatestMessage("auto"));
+    return () => cancelAnimationFrame(frameId);
+  }, [isChatHistoryLoaded, pageContext, shouldShowSetup]);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (shouldShowSetup || !isChatHistoryLoaded) return;
+    scrollToLatestMessage();
+  }, [messages, isLoading, isChatHistoryLoaded, shouldShowSetup]);
 
   useEffect(() => {
     if (!isProviderMenuOpen) return;
@@ -1485,7 +1505,7 @@ function App() {
         </div>
       )}
 
-      <div className="chat-window">
+      <div className="chat-window" ref={chatWindowRef}>
         {pageContext && (
           <div className="page-context-pill" title={pageContext.url}>
             <span>Using page</span>
