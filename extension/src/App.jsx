@@ -26,7 +26,11 @@ const LONG_ANSWER_TOKENS = 1300;
 const DEFAULT_MESSAGES = [{ text: "Ask me anything.", sender: "ai" }];
 
 const DEFAULT_TEMPLATES = [
-  { id: "summarize", label: "Summarize", instruction: "Summarize" },
+  {
+    id: "summarize",
+    label: "Summarize",
+    instruction: "Summarize briefly in 2 to 4 short sentences",
+  },
   {
     id: "explain",
     label: "Explain simply",
@@ -654,6 +658,14 @@ const getResponseSettings = (question) => {
       value,
     );
   const wantsBrief = /\b(short|brief|quick|summarize|summary|tldr|tl;dr)\b/.test(value);
+
+  if (wantsBrief && !wantsDetail) {
+    return {
+      maxOutputTokens: SHORT_ANSWER_TOKENS,
+      instruction:
+        "Use a brief answer: 2 to 4 short sentences. Do not include extra background unless needed.",
+    };
+  }
 
   if (wantsDetail && !wantsBrief) {
     return {
