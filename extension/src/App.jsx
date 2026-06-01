@@ -334,8 +334,8 @@ const getOpenRouterModelCandidates = async (apiKey) => {
       modelCache.openrouterCandidates.set(apiKey, models);
       return models;
     }
-  } catch (error) {
-    console.warn("OpenRouter model lookup failed:", error);
+  } catch {
+    // Fall back to the default model if OpenRouter model lookup is unavailable.
   }
 
   const fallbackModels = [PROVIDERS.openrouter.fallbackModel];
@@ -413,7 +413,6 @@ const callOpenRouter = async (apiKey, message, options = {}) => {
       if (error instanceof ApiAuthError || model === candidateModels.at(-1)) {
         throw error;
       }
-      console.warn(`OpenRouter model ${model} failed, trying another model:`, error);
     }
   }
 
@@ -753,6 +752,7 @@ const Header = ({
   onToggleProviderMenu,
   onToggleTheme,
   onUsePage,
+  providerMenuRef,
   setup = false,
   theme,
 }) => (
@@ -768,7 +768,7 @@ const Header = ({
     </div>
 
     {!setup && (
-      <div className="header-actions">
+      <div className="header-actions" ref={providerMenuRef}>
         <button
           type="button"
           className="provider-icon-btn"
@@ -780,53 +780,45 @@ const Header = ({
         </button>
 
         {isProviderMenuOpen && (
-          <>
+          <div className="provider-action-list" role="menu">
             <button
               type="button"
-              className="provider-menu-close-area"
-              onClick={onToggleProviderMenu}
-              aria-label="Close provider menu"
-            />
-            <div className="provider-action-list" role="menu">
-              <button
-                type="button"
-                className="provider-action-item"
-                onClick={onUsePage}
-                role="menuitem"
-                disabled={isPageContextLoading}
-              >
-                <span>{isPageContextLoading ? "Reading page..." : "Use this page"}</span>
-                <small>Ask about current article</small>
-              </button>
-              <button
-                type="button"
-                className="provider-action-item"
-                onClick={() => onOpenConfirm("change")}
-                role="menuitem"
-              >
-                <span>Change provider</span>
-                <small>Use another API key</small>
-              </button>
-              <button
-                type="button"
-                className="provider-action-item danger"
-                onClick={() => onOpenConfirm("clear")}
-                role="menuitem"
-              >
-                <span>Clear saved key</span>
-                <small>Return to setup</small>
-              </button>
-              <button
-                type="button"
-                className="provider-action-item danger"
-                onClick={() => onOpenConfirm("clear-chat")}
-                role="menuitem"
-              >
-                <span>Clear chat</span>
-                <small>Keep provider settings</small>
-              </button>
-            </div>
-          </>
+              className="provider-action-item"
+              onClick={onUsePage}
+              role="menuitem"
+              disabled={isPageContextLoading}
+            >
+              <span>{isPageContextLoading ? "Reading page..." : "Use this page"}</span>
+              <small>Ask about current article</small>
+            </button>
+            <button
+              type="button"
+              className="provider-action-item"
+              onClick={() => onOpenConfirm("change")}
+              role="menuitem"
+            >
+              <span>Change provider</span>
+              <small>Use another API key</small>
+            </button>
+            <button
+              type="button"
+              className="provider-action-item danger"
+              onClick={() => onOpenConfirm("clear")}
+              role="menuitem"
+            >
+              <span>Clear saved key</span>
+              <small>Return to setup</small>
+            </button>
+            <button
+              type="button"
+              className="provider-action-item danger"
+              onClick={() => onOpenConfirm("clear-chat")}
+              role="menuitem"
+            >
+              <span>Clear chat</span>
+              <small>Keep provider settings</small>
+            </button>
+          </div>
         )}
       </div>
     )}
@@ -867,6 +859,7 @@ function App() {
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const providerMenuRef = useRef(null);
 
   const activeProvider = PROVIDERS[provider];
   const shouldShowSetup = isConfigLoaded && (!apiKey || isEditingConfig);
@@ -879,6 +872,36 @@ function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!isProviderMenuOpen) return;
+
+    const handlePointerDown = (event) => {
+      if (!providerMenuRef.current?.contains(event.target)) {
+        setIsProviderMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setIsProviderMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isProviderMenuOpen]);
+
+  useEffect(() => {
+    if (shouldShowSetup) {
+      setIsProviderMenuOpen(false);
+    }
+  }, [shouldShowSetup]);
 
   useEffect(() => {
     const loadInitialState = async () => {
@@ -930,8 +953,7 @@ function App() {
           setInput(String(selectedText));
           await removeStoredValue(STORAGE_KEYS.selectedText);
         }
-      } catch (error) {
-        console.error("Failed to load saved extension state:", error);
+      } catch {
         setSetupError(
           "Saved settings could not be loaded. Check Chrome extension storage and try again.",
         );
@@ -947,7 +969,9 @@ function App() {
   useEffect(() => {
     if (!isChatHistoryLoaded) return;
     saveStoredValue(STORAGE_KEYS.chatHistory, JSON.stringify(getSavedMessages(messages))).catch(
-      (error) => console.error("Failed to save chat history:", error),
+      () => {
+        // Chat history is non-critical; the current conversation stays visible in memory.
+      },
     );
   }, [isChatHistoryLoaded, messages]);
 
@@ -1001,14 +1025,13 @@ function App() {
         { maxOutputTokens: 8 },
       );
     } catch (error) {
-      console.error("API key validation failed:", error);
       setSetupError(getApiErrorMessage(provider, error));
       setApiKey("");
       try {
         await removeStoredValue(STORAGE_KEYS.apiConfig);
         await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
-      } catch (storageError) {
-        console.error("Failed to clear invalid API config:", storageError);
+      } catch {
+        // The validation error is already shown; stale storage can be replaced on the next save.
       }
       setIsSavingConfig(false);
       return;
@@ -1025,8 +1048,7 @@ function App() {
         ...prev,
         { text: `${PROVIDERS[provider].label} is ready. What do you want to ask?`, sender: "ai" },
       ]);
-    } catch (error) {
-      console.error("Failed to save API key:", error);
+    } catch {
       setSetupError("Chrome could not save this API key locally. Please try again.");
       setApiKey("");
     } finally {
@@ -1043,8 +1065,7 @@ function App() {
       setApiKeyInput("");
       setSetupError("");
       setIsEditingConfig(true);
-    } catch (error) {
-      console.error("Failed to clear API key:", error);
+    } catch {
       setSetupError("Chrome could not clear the saved API key. Please try again.");
     } finally {
       setIsSavingConfig(false);
@@ -1074,8 +1095,7 @@ function App() {
       try {
         await removeStoredValue(STORAGE_KEYS.chatHistory);
         setMessages(DEFAULT_MESSAGES);
-      } catch (error) {
-        console.error("Failed to clear chat history:", error);
+      } catch {
         setMessages((prev) => [
           ...prev,
           {
@@ -1108,7 +1128,6 @@ function App() {
         { text: `Now using this page: ${nextContext.title}`, sender: "ai" },
       ]);
     } catch (error) {
-      console.error("Page capture failed:", error);
       setMessages((prev) => [
         ...prev,
         { text: error.message || "I could not use this page.", sender: "ai", error: true },
@@ -1145,8 +1164,8 @@ function App() {
           const tab = await getActiveTab();
           if (!isSameContextUrl(tab.url, contextForPrompt.url)) {
             contextForPrompt = null;
-            await clearPageContext().catch((error) => {
-              console.error("Failed to clear stale page context:", error);
+            await clearPageContext().catch(() => {
+              // Stale context is ignored for this request even if storage cleanup fails.
             });
           }
         } catch {
@@ -1179,14 +1198,12 @@ function App() {
 
       setMessages((prev) => [...prev, { text: reply, sender: "ai" }]);
     } catch (error) {
-      console.error("Error:", error);
-
       if (error instanceof ApiAuthError) {
         try {
           await removeStoredValue(STORAGE_KEYS.apiConfig);
           await removeStoredValue(STORAGE_KEYS.legacyGeminiKey);
-        } catch (storageError) {
-          console.error("Failed to clear invalid API config:", storageError);
+        } catch {
+          // The auth error is already shown; stale storage can be replaced on the next save.
         }
         setApiKey("");
         setApiKeyInput("");
@@ -1230,8 +1247,7 @@ function App() {
       setCustomPrompt("");
       setIsCustomPromptOpen(false);
       setIsTemplateMenuOpen(true);
-    } catch (error) {
-      console.error("Failed to save custom instruction:", error);
+    } catch {
       setMessages((prev) => [
         ...prev,
         {
@@ -1245,8 +1261,7 @@ function App() {
 
   const deleteCustomTemplate = (templateId) =>
     saveCustomTemplates(customTemplates.filter((template) => template.id !== templateId)).catch(
-      (error) => {
-        console.error("Failed to delete custom instruction:", error);
+      () => {
         setMessages((prev) => [
           ...prev,
           {
@@ -1394,6 +1409,7 @@ function App() {
         onToggleProviderMenu={() => setIsProviderMenuOpen((value) => !value)}
         onToggleTheme={() => setTheme((value) => (value === "light" ? "dark" : "light"))}
         onUsePage={useCurrentPage}
+        providerMenuRef={providerMenuRef}
         theme={theme}
       />
 

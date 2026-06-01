@@ -347,14 +347,6 @@ body {
   min-width: 150px;
 }
 
-.provider-menu-close-area {
-  position: fixed;
-  inset: 0;
-  z-index: 18;
-  border: none;
-  background: transparent;
-}
-
 .provider-action-list {
   position: absolute;
   top: calc(100% + 0.45rem);

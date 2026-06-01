@@ -34,8 +34,7 @@ const openChat = () => {
     return;
   }
 
-  chrome.action.openPopup().catch((error) => {
-    console.error("Failed to open popup:", error);
+  chrome.action.openPopup().catch(() => {
     createChatWindow();
   });
 };
@@ -58,8 +57,8 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
   try {
     await saveSelectedText(trimSelectedText(info.selectionText));
-  } catch (error) {
-    console.error("Failed to save selected text:", error);
+  } catch {
+    // Open the chat even if selected text could not be stored.
   }
 
   openChat();
