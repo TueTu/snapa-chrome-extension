@@ -305,12 +305,23 @@ const callGemini = async (apiKey, message, options = {}) => {
 
   if (!response.ok) throwGeminiError(response, data);
 
-  const reply = data?.candidates?.[0]?.content?.parts
+  const candidate = data?.candidates?.[0];
+  const finishReason = String(candidate?.finishReason || "");
+  const reply = candidate?.content?.parts
     ?.map((part) => part.text || "")
     .join("")
     .trim();
 
-  return reply || "Gemini returned an empty response.";
+  const text = reply || "Gemini returned an empty response.";
+  if (options.returnDetails) {
+    return {
+      text,
+      wasTruncated: finishReason === "MAX_TOKENS",
+      finishReason,
+    };
+  }
+
+  return text;
 };
 
 const getOpenRouterModelCandidates = async (apiKey) => {
@@ -397,7 +408,19 @@ const callOpenRouterModel = async (apiKey, model, message, options = {}) => {
     throw createOpenRouterError(response, data);
   }
 
-  return data?.choices?.[0]?.message?.content?.trim() || "OpenRouter returned an empty response.";
+  const choice = data?.choices?.[0];
+  const text = choice?.message?.content?.trim() || "OpenRouter returned an empty response.";
+  const finishReason = String(choice?.finish_reason || choice?.native_finish_reason || "");
+
+  if (options.returnDetails) {
+    return {
+      text,
+      wasTruncated: finishReason === "length" || finishReason === "max_tokens",
+      finishReason,
+    };
+  }
+
+  return text;
 };
 
 const callOpenRouter = async (apiKey, message, options = {}) => {
@@ -654,7 +677,7 @@ ${recentConversation ? `Recent conversation:\n${recentConversation}\n\n` : ""}${
 const getResponseSettings = (question) => {
   const value = String(question || "").trim().toLowerCase();
   const wantsDetail =
-    /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|medium|long)\b/.test(
+    /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|tell me about|medium|long)\b/.test(
       value,
     );
   const wantsBrief = /\b(short|brief|quick|summarize|summary|tldr|tl;dr)\b/.test(value);
@@ -695,6 +718,15 @@ const looksIncompleteReply = (reply) => {
   if (!value) return true;
   if (/(^|\n)\s*\d+\.?\s*$/.test(value)) return true;
   if (/(^|\n)\s*[-\u2022]\s*$/.test(value)) return true;
+  if (/[,;:]$/.test(value)) return true;
+  if (
+    /\b(a|an|about|above|after|and|are|as|at|because|before|but|by|for|from|if|in|into|is|of|on|or|over|than|that|the|their|to|under|when|where|which|while|who|with)\s*$/i.test(
+      value,
+    )
+  ) {
+    return true;
+  }
+  if (value.split(/\s+/).length >= 8 && !/[.!?)]["']?$/.test(value)) return true;
   return false;
 };
 
@@ -1202,20 +1234,26 @@ function App() {
         userQuestion: textToSend,
       });
       const responseSettings = getResponseSettings(textToSend);
-      let reply = await callProvider(
+      let replyDetails = await callProvider(
         { provider, apiKey },
         prompt,
-        { maxOutputTokens: responseSettings.maxOutputTokens },
+        { maxOutputTokens: responseSettings.maxOutputTokens, returnDetails: true },
       );
-      if (looksIncompleteReply(reply)) {
-        reply = await callProvider(
+      let reply = replyDetails.text;
+      if (replyDetails.wasTruncated || looksIncompleteReply(reply)) {
+        const retryMaxOutputTokens = Math.min(
+          LONG_ANSWER_TOKENS,
+          Math.max(responseSettings.maxOutputTokens * 2, MEDIUM_ANSWER_TOKENS),
+        );
+        replyDetails = await callProvider(
           { provider, apiKey },
           buildCompletionRetryPrompt({ firstReply: reply, originalPrompt: prompt }),
-          { maxOutputTokens: responseSettings.maxOutputTokens },
+          { maxOutputTokens: retryMaxOutputTokens, returnDetails: true },
         );
+        reply = replyDetails.text;
       }
 
-      if (looksIncompleteReply(reply)) {
+      if (replyDetails.wasTruncated || looksIncompleteReply(reply)) {
         throw new Error("The AI returned an incomplete answer. Please try again.");
       }
 
