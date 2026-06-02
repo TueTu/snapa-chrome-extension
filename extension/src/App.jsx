@@ -17,6 +17,7 @@ const PAGE_SUMMARY_TRIGGER = 9000;
 const PAGE_SUMMARY_INPUT_LIMIT = 12000;
 const REQUEST_TIMEOUT_MS = 25000;
 const MODEL_TIMEOUT_MS = 10000;
+const OPENROUTER_TIMEOUT_MS = 16000;
 const CHAT_PROMPT_MESSAGE_LIMIT = 6;
 const CHAT_PROMPT_MESSAGE_TEXT_LIMIT = 700;
 const SHORT_ANSWER_TOKENS = 500;
@@ -29,18 +30,24 @@ const DEFAULT_TEMPLATES = [
   {
     id: "summarize",
     label: "Summarize",
-    instruction: "Summarize briefly in 2 to 4 short sentences",
+    instruction: "Summarize",
+    promptInstruction:
+      "Summarize the content in one short paragraph. Use no more than 3 short sentences.",
+    displayText: "Summarize",
   },
   {
     id: "explain",
     label: "Explain simply",
     instruction: "Explain this in simple words",
+    displayText: "Explain simply",
   },
   {
     id: "key-points",
     label: "Find key points",
-    instruction:
-      "Find exactly 3 key points. Start with **Key Points:**, then use a numbered list. Each point must be one short sentence under 16 words. Bold only the main idea.",
+    instruction: "Find key points",
+    promptInstruction:
+      "Find the key points. Start with **Key Points:**, then use exactly 3 numbered points. Keep each point under 10 words.",
+    displayText: "Find key points",
   },
 ];
 
@@ -60,20 +67,14 @@ const PROVIDERS = {
     label: "OpenRouter",
     keyLabel: "OpenRouter API key",
     keyPlaceholder: "Paste your OpenRouter API key",
-    fallbackModel: "google/gemini-2.0-flash-exp:free",
-    preferredModels: [
-      "google/gemini-2.0-flash-exp:free",
-      "google/gemini-flash-1.5-8b:free",
-      "meta-llama/llama-3.2-3b-instruct:free",
-      "mistralai/mistral-7b-instruct:free",
-    ],
+    fallbackModel: "openrouter/free",
+    preferredModels: ["openrouter/free"],
   },
 };
 
 const modelCache = {
   gemini: new Map(),
   openrouter: new Map(),
-  openrouterCandidates: new Map(),
 };
 
 const getStorage = () =>
@@ -329,40 +330,6 @@ const callGemini = async (apiKey, message, options = {}) => {
   return text;
 };
 
-const getOpenRouterModelCandidates = async (apiKey) => {
-  if (modelCache.openrouterCandidates.has(apiKey)) {
-    return modelCache.openrouterCandidates.get(apiKey);
-  }
-
-  try {
-    const { response, data } = await requestJson(
-      "https://openrouter.ai/api/v1/models",
-      { headers: { Authorization: `Bearer ${apiKey}` } },
-      MODEL_TIMEOUT_MS,
-    );
-
-    if (response.ok) {
-      const availableModels = (data?.data || [])
-        .map((model) => String(model.id || ""))
-        .filter(Boolean);
-      const models = [
-        ...PROVIDERS.openrouter.preferredModels.filter((item) => availableModels.includes(item)),
-        ...availableModels.filter((item) => item.endsWith(":free")),
-        PROVIDERS.openrouter.fallbackModel,
-      ].filter((model, index, list) => model && list.indexOf(model) === index);
-
-      modelCache.openrouterCandidates.set(apiKey, models);
-      return models;
-    }
-  } catch {
-    // Fall back to the default model if OpenRouter model lookup is unavailable.
-  }
-
-  const fallbackModels = [PROVIDERS.openrouter.fallbackModel];
-  modelCache.openrouterCandidates.set(apiKey, fallbackModels);
-  return fallbackModels;
-};
-
 const createOpenRouterError = (response, data) => {
   const code = String(data?.error?.code || data?.error?.type || "");
   const message = getProviderErrorMessage(data, `OpenRouter request failed (${response.status})`);
@@ -393,21 +360,25 @@ const createOpenRouterError = (response, data) => {
 };
 
 const callOpenRouterModel = async (apiKey, model, message, options = {}) => {
-  const { response, data } = await requestJson("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "HTTP-Referer": "https://snapa.local",
-      "X-Title": "Snapa Chat",
+  const { response, data } = await requestJson(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://snapa.local",
+        "X-Title": "Snapa Chat",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: message }],
+        temperature: options.temperature ?? 0.25,
+        max_tokens: options.maxOutputTokens ?? 500,
+      }),
     },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: message }],
-      temperature: options.temperature ?? 0.25,
-      max_tokens: options.maxOutputTokens ?? 500,
-    }),
-  });
+    OPENROUTER_TIMEOUT_MS,
+  );
 
   if (!response.ok) {
     throw createOpenRouterError(response, data);
@@ -431,8 +402,11 @@ const callOpenRouterModel = async (apiKey, model, message, options = {}) => {
 const callOpenRouter = async (apiKey, message, options = {}) => {
   const cachedModel = modelCache.openrouter.get(apiKey);
   const candidateModels = cachedModel
-    ? [cachedModel]
-    : await getOpenRouterModelCandidates(apiKey);
+    ? [
+        cachedModel,
+        ...PROVIDERS.openrouter.preferredModels.filter((model) => model !== cachedModel),
+      ]
+    : PROVIDERS.openrouter.preferredModels;
   let lastError = null;
 
   for (const model of candidateModels) {
@@ -442,7 +416,14 @@ const callOpenRouter = async (apiKey, message, options = {}) => {
       return reply;
     } catch (error) {
       lastError = error;
-      if (error instanceof ApiAuthError || model === candidateModels.at(-1)) {
+      if (cachedModel) {
+        modelCache.openrouter.delete(apiKey);
+      }
+      if (
+        error instanceof ApiAuthError ||
+        error?.message === "The API request timed out. Please try again." ||
+        model === candidateModels.at(-1)
+      ) {
         throw error;
       }
     }
@@ -715,7 +696,7 @@ const getResponseSettings = (question) => {
     return {
       maxOutputTokens: SHORT_ANSWER_TOKENS,
       instruction:
-        "Use this exact format: **Key Points:**, then exactly 3 numbered points. Each point must be one short sentence. Bold only the main idea. No explanations or extra detail.",
+        "Use **Key Points:**, then exactly 3 numbered points. Keep each point under 10 words.",
     };
   }
 
@@ -723,7 +704,7 @@ const getResponseSettings = (question) => {
     return {
       maxOutputTokens: SHORT_ANSWER_TOKENS,
       instruction:
-        "Use a brief answer: 2 to 4 short sentences. Do not include extra background unless needed.",
+        "Use one short paragraph. Use no more than 3 short sentences. Do not include extra background unless needed.",
     };
   }
 
@@ -1229,8 +1210,28 @@ function App() {
     }
   };
 
-  const sendMessage = async (textOverride = null) => {
-    const textToSend = typeof textOverride === "string" ? textOverride : input;
+  const sendMessage = async (textOverride = null, options = {}) => {
+    const rawText = typeof textOverride === "string" ? textOverride : input;
+    const matchingTemplate = [...DEFAULT_TEMPLATES, ...customTemplates].find((template) => {
+      const label = template.displayText || template.label;
+      return rawText.trim().toLowerCase().startsWith(`${label.toLowerCase()}:`);
+    });
+    const templateLabel = matchingTemplate?.displayText || matchingTemplate?.label || "";
+    const textToSend = matchingTemplate
+      ? `${matchingTemplate.promptInstruction || matchingTemplate.instruction}:${rawText.trim().slice(
+          `${templateLabel}:`.length,
+        )}`
+      : rawText;
+    const templateBody = matchingTemplate
+      ? rawText.trim().slice(`${templateLabel}:`.length).trim()
+      : "";
+    const visibleText =
+      options.displayText ||
+      (matchingTemplate
+        ? templateBody
+          ? `${templateLabel}: ${templateBody}`
+          : templateLabel
+        : rawText);
     if (!textToSend.trim()) return;
 
     if (!apiKey) {
@@ -1245,7 +1246,7 @@ function App() {
       return;
     }
 
-    setMessages((prev) => [...prev, { text: textToSend, sender: "user" }]);
+    setMessages((prev) => [...prev, { text: visibleText, sender: "user" }]);
     setInput("");
     setIsLoading(true);
 
@@ -1321,12 +1322,14 @@ function App() {
   const applyTemplate = (template) => {
     setIsTemplateMenuOpen(false);
     if (!input.trim()) {
-      setInput(`${template.instruction}: `);
+      setInput(`${template.displayText || template.label}: `);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
 
-    sendMessage(`${template.instruction}:\n\n"${input}"`);
+    sendMessage(`${template.promptInstruction || template.instruction}:\n\n"${input}"`, {
+      displayText: `${template.displayText || template.label}: ${input}`,
+    });
   };
 
   const addCustomTemplate = async () => {
