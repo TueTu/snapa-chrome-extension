@@ -1762,10 +1762,6 @@ function App() {
           <div className="setup-copy">
             <h2>Connect your AI provider</h2>
             <p>Choose the API you want to use, then save your key to start chatting.</p>
-            <p className="setup-note">
-              Your API key is stored locally in Chrome extension storage on this browser. Snapa
-              Chat does not encrypt it or send it to a developer server.
-            </p>
           </div>
 
           <div className="provider-grid" role="radiogroup" aria-label="AI provider">
@@ -1835,6 +1831,10 @@ function App() {
               {isSavingConfig ? "Checking..." : "Save and start chat"}
             </button>
           </div>
+          <p className="setup-note">
+            Your API key is stored locally in Chrome extension storage on this browser.
+            Snapa Chat does not send it to a developer server.
+          </p>
         </main>
       </div>
     );
