@@ -471,6 +471,20 @@ const getApiErrorMessage = (provider, error) => {
   return `${providerName} could not verify this key.${detail || " Please try again."}`;
 };
 
+const getShortApiErrorMessage = (provider, error) => {
+  const providerName = PROVIDERS[provider]?.label || "API";
+
+  if (error instanceof ApiAuthError) {
+    return `${providerName} rejected this API key. Check or replace the saved key.`;
+  }
+
+  if (error instanceof ApiUsageError) {
+    return `${providerName} quota or rate limit was reached. Check your plan or try again later.`;
+  }
+
+  return `${providerName} request failed. Please try again.`;
+};
+
 const normalizeMessages = (messages) =>
   messages
     .filter(
@@ -764,7 +778,7 @@ Do not end with an unfinished number, bullet, phrase, or comma.`;
 
 const getChatErrorMessage = (provider, error) => {
   if (error instanceof ApiAuthError || error instanceof ApiUsageError) {
-    return getApiErrorMessage(provider, error);
+    return getShortApiErrorMessage(provider, error);
   }
 
   if (error?.name === "TypeError") {
