@@ -283,6 +283,15 @@ body {
   line-height: 1.45;
 }
 
+.setup-copy .setup-note {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--primary-color) 22%);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--input-bg) 78%, transparent);
+  font-size: 0.76rem;
+}
+
 .provider-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -484,6 +493,13 @@ body {
   text-overflow: ellipsis;
   color: var(--text-color);
   font-size: 0.72rem;
+}
+
+.page-context-pill em {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-style: normal;
+  font-size: 0.66rem;
 }
 
 .message {

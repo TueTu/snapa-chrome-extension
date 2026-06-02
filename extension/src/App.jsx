@@ -1,4 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  isFreeOpenRouterModel,
+  isTextOpenRouterModel,
+  parseSseEventJson,
+  scoreOpenRouterModel,
+} from "./appLogic.js";
 import "./index.css";
 
 const STORAGE_KEYS = {
@@ -11,10 +17,8 @@ const STORAGE_KEYS = {
 };
 
 const MAX_SAVED_MESSAGES = 30;
-const PAGE_TEXT_LIMIT = 9000;
-const PAGE_PROMPT_LIMIT = 7000;
-const PAGE_SUMMARY_TRIGGER = 9000;
-const PAGE_SUMMARY_INPUT_LIMIT = 12000;
+const PAGE_TEXT_LIMIT = 4000;
+const PAGE_PROMPT_LIMIT = 3500;
 const REQUEST_TIMEOUT_MS = 25000;
 const MODEL_TIMEOUT_MS = 10000;
 const OPENROUTER_MODEL_TIMEOUT_MS = 4000;
@@ -203,6 +207,12 @@ const truncateText = (text, limit) => {
   return value.length > limit ? `${value.slice(0, limit).trim()}...` : value;
 };
 
+const formatCharacterCount = (value) => {
+  const count = String(value || "").length;
+  if (count < 1000) return `${count} chars`;
+  return `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}k chars`;
+};
+
 const normalizeUrlForContext = (url) => {
   try {
     const nextUrl = new URL(url);
@@ -246,24 +256,14 @@ const readSseStream = async (response, onJson) => {
   let isDone = false;
 
   const handleEvent = (eventText) => {
-    const data = eventText
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trim())
-      .join("\n")
-      .trim();
-
-    if (!data) return;
-    if (data === "[DONE]") {
+    const event = parseSseEventJson(eventText);
+    if (event.empty || event.malformed) return;
+    if (event.done) {
       isDone = true;
       return;
     }
 
-    try {
-      onJson(JSON.parse(data));
-    } catch {
-      // Ignore malformed SSE fragments; providers sometimes send keepalive text.
-    }
+    onJson(event.json);
   };
 
   const drainEvents = () => {
@@ -397,7 +397,16 @@ const callGemini = async (apiKey, message, options = {}) => {
 const callGeminiStream = async (apiKey, message, options = {}) => {
   const model = await getBestGeminiModel(apiKey);
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let abortReason = "";
+  const handleExternalAbort = () => {
+    abortReason = "stopped";
+    controller.abort();
+  };
+  options.signal?.addEventListener("abort", handleExternalAbort, { once: true });
+  const timeoutId = setTimeout(() => {
+    abortReason = "timeout";
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
   let text = "";
   let finishReason = "";
 
@@ -442,11 +451,22 @@ const callGeminiStream = async (apiKey, message, options = {}) => {
     });
   } catch (error) {
     if (error?.name === "AbortError") {
+      if (text.trim()) {
+        return {
+          text: text.trim(),
+          wasTruncated: false,
+          finishReason: abortReason === "stopped" ? "STOPPED_PARTIAL" : "TIMEOUT_PARTIAL",
+        };
+      }
+      if (abortReason === "stopped") {
+        throw new Error("The request was stopped.");
+      }
       throw new Error("The API request timed out. Please try again.");
     }
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    options.signal?.removeEventListener("abort", handleExternalAbort);
   }
 
   return {
@@ -454,46 +474,6 @@ const callGeminiStream = async (apiKey, message, options = {}) => {
     wasTruncated: finishReason === "MAX_TOKENS",
     finishReason,
   };
-};
-
-const isFreeOpenRouterModel = (model) => {
-  const id = String(model?.id || "");
-  const promptPrice = Number(model?.pricing?.prompt || 0);
-  const completionPrice = Number(model?.pricing?.completion || 0);
-  return id.endsWith(":free") || (promptPrice === 0 && completionPrice === 0);
-};
-
-const isTextOpenRouterModel = (model) => {
-  const id = String(model?.id || "").toLowerCase();
-  const blockedTerms = [
-    "audio",
-    "asr",
-    "image",
-    "imagine",
-    "recraft",
-    "tts",
-    "transcribe",
-    "vision",
-    "vl",
-    "video",
-  ];
-
-  return Boolean(id) && !blockedTerms.some((term) => id.includes(term));
-};
-
-const scoreOpenRouterModel = (model) => {
-  const id = String(model?.id || "").toLowerCase();
-  let score = 0;
-
-  PROVIDERS.openrouter.preferredModelPatterns.forEach((pattern, index) => {
-    if (id.includes(pattern)) score += 40 - index * 2;
-  });
-
-  if (id.includes("reasoning") || id.includes("deepseek-r1")) score -= 35;
-  if (id.includes("preview") || id.includes("experimental")) score -= 8;
-  if (id.includes("free")) score += 4;
-
-  return score;
 };
 
 const getOpenRouterModelCandidates = async (apiKey) => {
@@ -511,7 +491,11 @@ const getOpenRouterModelCandidates = async (apiKey) => {
     if (response.ok) {
       const models = (data?.data || [])
         .filter((model) => isFreeOpenRouterModel(model) && isTextOpenRouterModel(model))
-        .sort((first, second) => scoreOpenRouterModel(second) - scoreOpenRouterModel(first))
+        .sort(
+          (first, second) =>
+            scoreOpenRouterModel(second, PROVIDERS.openrouter.preferredModelPatterns) -
+            scoreOpenRouterModel(first, PROVIDERS.openrouter.preferredModelPatterns),
+        )
         .map((model) => String(model.id || ""))
         .filter(Boolean)
         .slice(0, 3);
@@ -603,7 +587,16 @@ const callOpenRouterModel = async (apiKey, model, message, options = {}) => {
 
 const callOpenRouterModelStream = async (apiKey, model, message, options = {}) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+  let abortReason = "";
+  const handleExternalAbort = () => {
+    abortReason = "stopped";
+    controller.abort();
+  };
+  options.signal?.addEventListener("abort", handleExternalAbort, { once: true });
+  const timeoutId = setTimeout(() => {
+    abortReason = "timeout";
+    controller.abort();
+  }, OPENROUTER_TIMEOUT_MS);
   let text = "";
   let finishReason = "";
 
@@ -650,11 +643,22 @@ const callOpenRouterModelStream = async (apiKey, model, message, options = {}) =
     });
   } catch (error) {
     if (error?.name === "AbortError") {
+      if (text.trim()) {
+        return {
+          text: text.trim(),
+          wasTruncated: false,
+          finishReason: abortReason === "stopped" ? "STOPPED_PARTIAL" : "TIMEOUT_PARTIAL",
+        };
+      }
+      if (abortReason === "stopped") {
+        throw new Error("The request was stopped.");
+      }
       throw new Error("The API request timed out. Please try again.");
     }
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    options.signal?.removeEventListener("abort", handleExternalAbort);
   }
 
   return {
@@ -863,34 +867,17 @@ const extractPageContentFromTab = async () => {
   return page;
 };
 
-const createPageContext = async ({ provider, apiKey }) => {
+const createPageContext = async () => {
   const page = await extractPageContentFromTab();
   const excerpt = page.text.slice(0, PAGE_TEXT_LIMIT);
-  let summary = "";
-
-  if (page.text.length > PAGE_SUMMARY_TRIGGER) {
-    summary = await callProvider(
-      { provider, apiKey },
-      `Summarize this article for fast question answering.
-Use short ordered lines.
-Keep important names, dates, claims, evidence, and conclusions.
-
-Title: ${page.title}
-Author: ${page.author || "Unknown"}
-URL: ${page.url}
-
-Article:
-${page.text.slice(0, PAGE_SUMMARY_INPUT_LIMIT)}`,
-      { maxOutputTokens: 650 },
-    );
-  }
 
   return {
     title: page.title,
     author: page.author,
     url: page.url,
     excerpt,
-    summary,
+    summary: "",
+    contextSizeLabel: formatCharacterCount(excerpt),
     capturedAt: new Date().toISOString(),
   };
 };
@@ -1070,6 +1057,7 @@ const Header = ({
   apiKey,
   isProviderMenuOpen,
   isPageContextLoading,
+  pageContext,
   onOpenConfirm,
   onToggleProviderMenu,
   onToggleTheme,
@@ -1110,8 +1098,16 @@ const Header = ({
               role="menuitem"
               disabled={isPageContextLoading}
             >
-              <span>{isPageContextLoading ? "Reading page..." : "Use this page"}</span>
-              <small>Ask about current article</small>
+              <span>
+                {isPageContextLoading
+                  ? "Reading page..."
+                  : pageContext
+                    ? "Stop using this page"
+                    : "Use this page"}
+              </span>
+              <small>
+                {pageContext ? "Remove current page context" : "Ask about current article"}
+              </small>
             </button>
             <button
               type="button"
@@ -1183,6 +1179,7 @@ function App() {
   const chatWindowRef = useRef(null);
   const inputRef = useRef(null);
   const providerMenuRef = useRef(null);
+  const activeRequestControllerRef = useRef(null);
 
   const activeProvider = PROVIDERS[provider];
   const shouldShowSetup = isConfigLoaded && (!apiKey || isEditingConfig);
@@ -1452,6 +1449,24 @@ function App() {
   };
 
   const useCurrentPage = async () => {
+    setIsProviderMenuOpen(false);
+
+    if (pageContext) {
+      try {
+        await clearPageContext();
+        setMessages((prev) => [
+          ...prev,
+          { text: "Stopped using this page.", sender: "ai" },
+        ]);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          { text: "Chrome could not clear the page context. Please try again.", sender: "ai", error: true },
+        ]);
+      }
+      return;
+    }
+
     if (!apiKey) {
       setMessages((prev) => [
         ...prev,
@@ -1460,14 +1475,16 @@ function App() {
       return;
     }
 
-    setIsProviderMenuOpen(false);
     setIsPageContextLoading(true);
     try {
-      const nextContext = await createPageContext({ provider, apiKey });
+      const nextContext = await createPageContext();
       await savePageContext(nextContext);
       setMessages((prev) => [
         ...prev,
-        { text: `Now using this page: ${nextContext.title}`, sender: "ai" },
+        {
+          text: `Now using this page: ${nextContext.title} (${nextContext.contextSizeLabel})`,
+          sender: "ai",
+        },
       ]);
     } catch (error) {
       setMessages((prev) => [
@@ -1502,6 +1519,7 @@ function App() {
           : templateLabel
         : rawText);
     if (!textToSend.trim()) return;
+    if (isLoading) return;
 
     if (!apiKey) {
       setMessages((prev) => [
@@ -1518,6 +1536,8 @@ function App() {
     setMessages((prev) => [...prev, { text: visibleText, sender: "user" }]);
     setInput("");
     setIsLoading(true);
+    const requestController = new AbortController();
+    activeRequestControllerRef.current = requestController;
     const streamMessageId =
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -1536,6 +1556,7 @@ function App() {
       maxOutputTokens,
       returnDetails: true,
       stream: true,
+      signal: requestController.signal,
       onToken: (token) => {
         streamedReply += token;
         updateStreamedReply(streamedReply);
@@ -1575,21 +1596,35 @@ function App() {
       );
       let reply = replyDetails.text;
       if (replyDetails.wasTruncated || looksIncompleteReply(reply)) {
+        const firstReply = reply;
         const retryMaxOutputTokens = Math.min(
           LONG_ANSWER_TOKENS,
           Math.max(responseSettings.maxOutputTokens * 2, MEDIUM_ANSWER_TOKENS),
         );
         streamedReply = "";
-        updateStreamedReply("");
         replyDetails = await callProvider(
           { provider, apiKey },
           buildCompletionRetryPrompt({ firstReply: reply, originalPrompt: prompt }),
           createStreamOptions(retryMaxOutputTokens),
         );
         reply = replyDetails.text;
+        if ((replyDetails.wasTruncated || looksIncompleteReply(reply)) && firstReply.trim()) {
+          reply = firstReply;
+          replyDetails = {
+            ...replyDetails,
+            text: firstReply,
+            wasTruncated: false,
+            finishReason: "PARTIAL_KEPT",
+          };
+        }
       }
 
       if (replyDetails.wasTruncated || looksIncompleteReply(reply)) {
+        if (reply.trim()) {
+          updateStreamedReply(reply, false);
+          return;
+        }
+
         throw new Error("The AI returned an incomplete answer. Please try again.");
       }
 
@@ -1613,8 +1648,15 @@ function App() {
         { text: getChatErrorMessage(provider, error), sender: "ai", error: true },
       ]);
     } finally {
+      if (activeRequestControllerRef.current === requestController) {
+        activeRequestControllerRef.current = null;
+      }
       setIsLoading(false);
     }
+  };
+
+  const stopActiveRequest = () => {
+    activeRequestControllerRef.current?.abort();
   };
 
   const applyTemplate = (template) => {
@@ -1720,6 +1762,10 @@ function App() {
           <div className="setup-copy">
             <h2>Connect your AI provider</h2>
             <p>Choose the API you want to use, then save your key to start chatting.</p>
+            <p className="setup-note">
+              Your API key is stored locally in Chrome extension storage on this browser. Snapa
+              Chat does not encrypt it or send it to a developer server.
+            </p>
           </div>
 
           <div className="provider-grid" role="radiogroup" aria-label="AI provider">
@@ -1808,6 +1854,7 @@ function App() {
         onToggleProviderMenu={() => setIsProviderMenuOpen((value) => !value)}
         onToggleTheme={() => setTheme((value) => (value === "light" ? "dark" : "light"))}
         onUsePage={useCurrentPage}
+        pageContext={pageContext}
         providerMenuRef={providerMenuRef}
         theme={theme}
       />
@@ -1886,6 +1933,7 @@ function App() {
           <div className="page-context-pill" title={pageContext.url}>
             <span>Using page</span>
             <strong>{pageContext.title}</strong>
+            {pageContext.contextSizeLabel && <em>{pageContext.contextSizeLabel}</em>}
           </div>
         )}
 
@@ -2014,11 +2062,23 @@ function App() {
           </div>
           <button
             className="send-btn"
-            onClick={() => sendMessage()}
-            disabled={isLoading || !apiKey || !input.trim()}
+            onClick={() => {
+              if (isLoading) {
+                stopActiveRequest();
+                return;
+              }
+
+              sendMessage();
+            }}
+            disabled={!apiKey || (!isLoading && !input.trim())}
+            aria-label={isLoading ? "Stop response" : "Send message"}
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              {isLoading ? (
+                <path d="M7 7h10v10H7z" />
+              ) : (
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              )}
             </svg>
           </button>
         </div>
