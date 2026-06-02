@@ -17,6 +17,7 @@ const PAGE_SUMMARY_TRIGGER = 9000;
 const PAGE_SUMMARY_INPUT_LIMIT = 12000;
 const REQUEST_TIMEOUT_MS = 25000;
 const MODEL_TIMEOUT_MS = 10000;
+const OPENROUTER_MODEL_TIMEOUT_MS = 4000;
 const OPENROUTER_TIMEOUT_MS = 16000;
 const CHAT_PROMPT_MESSAGE_LIMIT = 6;
 const CHAT_PROMPT_MESSAGE_TEXT_LIMIT = 700;
@@ -68,13 +69,25 @@ const PROVIDERS = {
     keyLabel: "OpenRouter API key",
     keyPlaceholder: "Paste your OpenRouter API key",
     fallbackModel: "openrouter/free",
-    preferredModels: ["openrouter/free"],
+    preferredModelPatterns: [
+      "flash-lite",
+      "flash",
+      "gemini",
+      "qwen",
+      "llama",
+      "mistral",
+      "gemma",
+      "mini",
+      "small",
+      "instruct",
+    ],
   },
 };
 
 const modelCache = {
   gemini: new Map(),
   openrouter: new Map(),
+  openrouterCandidates: new Map(),
 };
 
 const getStorage = () =>
@@ -224,6 +237,57 @@ const requestJson = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) =>
   }
 };
 
+const readSseStream = async (response, onJson) => {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("The API response could not be streamed.");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let isDone = false;
+
+  const handleEvent = (eventText) => {
+    const data = eventText
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n")
+      .trim();
+
+    if (!data) return;
+    if (data === "[DONE]") {
+      isDone = true;
+      return;
+    }
+
+    try {
+      onJson(JSON.parse(data));
+    } catch {
+      // Ignore malformed SSE fragments; providers sometimes send keepalive text.
+    }
+  };
+
+  const drainEvents = () => {
+    let separatorIndex = buffer.search(/\r?\n\r?\n/);
+    while (separatorIndex !== -1) {
+      const eventText = buffer.slice(0, separatorIndex);
+      const separatorLength = buffer[separatorIndex] === "\r" ? 4 : 2;
+      buffer = buffer.slice(separatorIndex + separatorLength);
+      handleEvent(eventText);
+      separatorIndex = buffer.search(/\r?\n\r?\n/);
+    }
+  };
+
+  while (!isDone) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    drainEvents();
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) handleEvent(buffer);
+};
+
 const throwGeminiError = (response, data) => {
   const code = String(data?.error?.status || data?.error?.code || "");
 
@@ -330,6 +394,144 @@ const callGemini = async (apiKey, message, options = {}) => {
   return text;
 };
 
+const callGeminiStream = async (apiKey, message, options = {}) => {
+  const model = await getBestGeminiModel(apiKey);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let text = "";
+  let finishReason = "";
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: message }] }],
+          generationConfig: {
+            temperature: options.temperature ?? 0.25,
+            maxOutputTokens: options.maxOutputTokens ?? 500,
+          },
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throwGeminiError(response, data);
+    }
+
+    await readSseStream(response, (chunk) => {
+      const candidate = chunk?.candidates?.[0];
+      const delta =
+        candidate?.content?.parts
+          ?.map((part) => part.text || "")
+          .join("") || "";
+
+      if (delta) {
+        text += delta;
+        options.onToken?.(delta);
+      }
+
+      finishReason = String(candidate?.finishReason || finishReason);
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("The API request timed out. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  return {
+    text: text.trim() || "Gemini returned an empty response.",
+    wasTruncated: finishReason === "MAX_TOKENS",
+    finishReason,
+  };
+};
+
+const isFreeOpenRouterModel = (model) => {
+  const id = String(model?.id || "");
+  const promptPrice = Number(model?.pricing?.prompt || 0);
+  const completionPrice = Number(model?.pricing?.completion || 0);
+  return id.endsWith(":free") || (promptPrice === 0 && completionPrice === 0);
+};
+
+const isTextOpenRouterModel = (model) => {
+  const id = String(model?.id || "").toLowerCase();
+  const blockedTerms = [
+    "audio",
+    "asr",
+    "image",
+    "imagine",
+    "recraft",
+    "tts",
+    "transcribe",
+    "vision",
+    "vl",
+    "video",
+  ];
+
+  return Boolean(id) && !blockedTerms.some((term) => id.includes(term));
+};
+
+const scoreOpenRouterModel = (model) => {
+  const id = String(model?.id || "").toLowerCase();
+  let score = 0;
+
+  PROVIDERS.openrouter.preferredModelPatterns.forEach((pattern, index) => {
+    if (id.includes(pattern)) score += 40 - index * 2;
+  });
+
+  if (id.includes("reasoning") || id.includes("deepseek-r1")) score -= 35;
+  if (id.includes("preview") || id.includes("experimental")) score -= 8;
+  if (id.includes("free")) score += 4;
+
+  return score;
+};
+
+const getOpenRouterModelCandidates = async (apiKey) => {
+  if (modelCache.openrouterCandidates.has(apiKey)) {
+    return modelCache.openrouterCandidates.get(apiKey);
+  }
+
+  try {
+    const { response, data } = await requestJson(
+      "https://openrouter.ai/api/v1/models",
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+      OPENROUTER_MODEL_TIMEOUT_MS,
+    );
+
+    if (response.ok) {
+      const models = (data?.data || [])
+        .filter((model) => isFreeOpenRouterModel(model) && isTextOpenRouterModel(model))
+        .sort((first, second) => scoreOpenRouterModel(second) - scoreOpenRouterModel(first))
+        .map((model) => String(model.id || ""))
+        .filter(Boolean)
+        .slice(0, 3);
+
+      const candidates = [...models, PROVIDERS.openrouter.fallbackModel].filter(
+        (model, index, list) => model && list.indexOf(model) === index,
+      );
+
+      modelCache.openrouterCandidates.set(apiKey, candidates);
+      return candidates;
+    }
+  } catch {
+    // If model discovery is slow or unavailable, use OpenRouter's free router.
+  }
+
+  const fallbackModels = [PROVIDERS.openrouter.fallbackModel];
+  modelCache.openrouterCandidates.set(apiKey, fallbackModels);
+  return fallbackModels;
+};
+
 const createOpenRouterError = (response, data) => {
   const code = String(data?.error?.code || data?.error?.type || "");
   const message = getProviderErrorMessage(data, `OpenRouter request failed (${response.status})`);
@@ -399,19 +601,84 @@ const callOpenRouterModel = async (apiKey, model, message, options = {}) => {
   return text;
 };
 
+const callOpenRouterModelStream = async (apiKey, model, message, options = {}) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+  let text = "";
+  let finishReason = "";
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://snapa.local",
+        "X-Title": "Snapa Chat",
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: message }],
+        temperature: options.temperature ?? 0.25,
+        max_tokens: options.maxOutputTokens ?? 500,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw createOpenRouterError(response, data);
+    }
+
+    await readSseStream(response, (chunk) => {
+      const choice = chunk?.choices?.[0];
+      const delta = choice?.delta?.content || "";
+
+      if (delta) {
+        text += delta;
+        options.onToken?.(delta);
+      }
+
+      finishReason = String(
+        choice?.finish_reason || choice?.native_finish_reason || finishReason,
+      );
+
+      if (chunk?.error) {
+        throw new Error(chunk.error.message || "OpenRouter streaming failed.");
+      }
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("The API request timed out. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  return {
+    text: text.trim() || "OpenRouter returned an empty response.",
+    wasTruncated: finishReason === "length" || finishReason === "max_tokens",
+    finishReason,
+  };
+};
+
 const callOpenRouter = async (apiKey, message, options = {}) => {
   const cachedModel = modelCache.openrouter.get(apiKey);
   const candidateModels = cachedModel
     ? [
         cachedModel,
-        ...PROVIDERS.openrouter.preferredModels.filter((model) => model !== cachedModel),
+        ...(await getOpenRouterModelCandidates(apiKey)).filter((model) => model !== cachedModel),
       ]
-    : PROVIDERS.openrouter.preferredModels;
+    : await getOpenRouterModelCandidates(apiKey);
   let lastError = null;
 
   for (const model of candidateModels) {
     try {
-      const reply = await callOpenRouterModel(apiKey, model, message, options);
+      const reply = options.stream
+        ? await callOpenRouterModelStream(apiKey, model, message, options)
+        : await callOpenRouterModel(apiKey, model, message, options);
       modelCache.openrouter.set(apiKey, model);
       return reply;
     } catch (error) {
@@ -422,7 +689,7 @@ const callOpenRouter = async (apiKey, message, options = {}) => {
       if (
         error instanceof ApiAuthError ||
         error?.message === "The API request timed out. Please try again." ||
-        model === candidateModels.at(-1)
+        (model === PROVIDERS.openrouter.fallbackModel && model === candidateModels.at(-1))
       ) {
         throw error;
       }
@@ -435,7 +702,9 @@ const callOpenRouter = async (apiKey, message, options = {}) => {
 const callProvider = ({ provider, apiKey }, message, options = {}) =>
   provider === "openrouter"
     ? callOpenRouter(apiKey, message, options)
-    : callGemini(apiKey, message, options);
+    : options.stream
+      ? callGeminiStream(apiKey, message, options)
+      : callGemini(apiKey, message, options);
 
 const getApiErrorMessage = (provider, error) => {
   const providerName = PROVIDERS[provider]?.label || "API";
@@ -480,7 +749,7 @@ const normalizeMessages = (messages) =>
     }));
 
 const getSavedMessages = (messages) =>
-  normalizeMessages(messages)
+  normalizeMessages(messages.filter((message) => !message.streaming))
     .filter((message) => !message.error)
     .slice(-MAX_SAVED_MESSAGES);
 
@@ -1249,6 +1518,29 @@ function App() {
     setMessages((prev) => [...prev, { text: visibleText, sender: "user" }]);
     setInput("");
     setIsLoading(true);
+    const streamMessageId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `stream-${Date.now()}`;
+    let streamedReply = "";
+    const updateStreamedReply = (nextText, streaming = true) => {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === streamMessageId
+            ? { ...message, text: nextText, streaming }
+            : message,
+        ),
+      );
+    };
+    const createStreamOptions = (maxOutputTokens) => ({
+      maxOutputTokens,
+      returnDetails: true,
+      stream: true,
+      onToken: (token) => {
+        streamedReply += token;
+        updateStreamedReply(streamedReply);
+      },
+    });
 
     try {
       let contextForPrompt = pageContext;
@@ -1272,10 +1564,14 @@ function App() {
         userQuestion: textToSend,
       });
       const responseSettings = getResponseSettings(textToSend);
+      setMessages((prev) => [
+        ...prev,
+        { id: streamMessageId, text: "", sender: "ai", streaming: true },
+      ]);
       let replyDetails = await callProvider(
         { provider, apiKey },
         prompt,
-        { maxOutputTokens: responseSettings.maxOutputTokens, returnDetails: true },
+        createStreamOptions(responseSettings.maxOutputTokens),
       );
       let reply = replyDetails.text;
       if (replyDetails.wasTruncated || looksIncompleteReply(reply)) {
@@ -1283,10 +1579,12 @@ function App() {
           LONG_ANSWER_TOKENS,
           Math.max(responseSettings.maxOutputTokens * 2, MEDIUM_ANSWER_TOKENS),
         );
+        streamedReply = "";
+        updateStreamedReply("");
         replyDetails = await callProvider(
           { provider, apiKey },
           buildCompletionRetryPrompt({ firstReply: reply, originalPrompt: prompt }),
-          { maxOutputTokens: retryMaxOutputTokens, returnDetails: true },
+          createStreamOptions(retryMaxOutputTokens),
         );
         reply = replyDetails.text;
       }
@@ -1295,7 +1593,7 @@ function App() {
         throw new Error("The AI returned an incomplete answer. Please try again.");
       }
 
-      setMessages((prev) => [...prev, { text: reply, sender: "ai" }]);
+      updateStreamedReply(reply, false);
     } catch (error) {
       if (error instanceof ApiAuthError) {
         try {
@@ -1311,7 +1609,7 @@ function App() {
       }
 
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter((message) => message.id !== streamMessageId),
         { text: getChatErrorMessage(provider, error), sender: "ai", error: true },
       ]);
     } finally {
@@ -1596,11 +1894,21 @@ function App() {
             key={index}
             className={`message ${message.sender} ${message.error ? "error" : ""}`}
           >
-            <div className="message-content">{formatMessageText(message.text)}</div>
+            <div className="message-content">
+              {message.streaming && !message.text ? (
+                <div className="typing-indicator">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              ) : (
+                formatMessageText(message.text)
+              )}
+            </div>
           </div>
         ))}
 
-        {isLoading && (
+        {isLoading && !messages.some((message) => message.streaming) && (
           <div className="message ai">
             <div className="message-content">
               <div className="typing-indicator">
