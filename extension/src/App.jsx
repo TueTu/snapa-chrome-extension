@@ -36,7 +36,12 @@ const DEFAULT_TEMPLATES = [
     label: "Explain simply",
     instruction: "Explain this in simple words",
   },
-  { id: "key-points", label: "Find key points", instruction: "Find the key points" },
+  {
+    id: "key-points",
+    label: "Find key points",
+    instruction:
+      "Find exactly 3 key points. Start with **Key Points:**, then use a numbered list. Each point must be one short sentence under 16 words. Bold only the main idea.",
+  },
 ];
 
 const PROVIDERS = {
@@ -484,9 +489,17 @@ const getSavedMessages = (messages) =>
     .filter((message) => !message.error)
     .slice(-MAX_SAVED_MESSAGES);
 
+const renderInlineText = (line, lineIndex) =>
+  line.split(/(\*\*[^*]+?\*\*)/g).map((part, partIndex) => {
+    if (/^\*\*[^*]+?\*\*$/.test(part)) {
+      return <strong key={`${lineIndex}-${partIndex}`}>{part.slice(2, -2)}</strong>;
+    }
+
+    return part;
+  });
+
 const formatMessageText = (text) => {
   const formatted = String(text)
-    .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/(^|[.!?:;])\s+([1-9]\d?\.)\s+(?=\S)/g, "$1\n\n$2 ")
@@ -503,7 +516,7 @@ const formatMessageText = (text) => {
   return formatted.split("\n").map((line, index) => (
     <span key={`${index}-${line}`}>
       {index > 0 && <br />}
-      {line}
+      {renderInlineText(line, index)}
     </span>
   ));
 };
@@ -676,11 +689,21 @@ ${recentConversation ? `Recent conversation:\n${recentConversation}\n\n` : ""}${
 
 const getResponseSettings = (question) => {
   const value = String(question || "").trim().toLowerCase();
+  const wantsKeyPoints =
+    /\b(key point|key points|main point|main points|takeaway|takeaways)\b/.test(value);
   const wantsDetail =
     /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|tell me about|medium|long)\b/.test(
       value,
     );
   const wantsBrief = /\b(short|brief|quick|summarize|summary|tldr|tl;dr)\b/.test(value);
+
+  if (wantsKeyPoints) {
+    return {
+      maxOutputTokens: SHORT_ANSWER_TOKENS,
+      instruction:
+        "Use this exact format: **Key Points:**, then exactly 3 numbered points. Each point must be one short sentence. Bold only the main idea. No explanations or extra detail.",
+    };
+  }
 
   if (wantsBrief && !wantsDetail) {
     return {
