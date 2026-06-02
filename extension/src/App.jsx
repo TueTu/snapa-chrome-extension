@@ -26,8 +26,8 @@ const OPENROUTER_TIMEOUT_MS = 16000;
 const CHAT_PROMPT_MESSAGE_LIMIT = 6;
 const CHAT_PROMPT_MESSAGE_TEXT_LIMIT = 700;
 const SHORT_ANSWER_TOKENS = 500;
-const MEDIUM_ANSWER_TOKENS = 900;
-const LONG_ANSWER_TOKENS = 1300;
+const MEDIUM_ANSWER_TOKENS = 650;
+const LONG_ANSWER_TOKENS = 800;
 
 const DEFAULT_MESSAGES = [{ text: "Ask me anything.", sender: "ai" }];
 
@@ -51,7 +51,7 @@ const DEFAULT_TEMPLATES = [
     label: "Find key points",
     instruction: "Find key points",
     promptInstruction:
-      "Find the key points. Start with **Key Points:**, then use exactly 3 numbered points. Keep each point under 10 words.",
+      "Find the key points. Start with **Key Points:**, then use 2 to 5 numbered points as needed. Keep each point under 10 words.",
     displayText: "Find key points",
   },
 ];
@@ -926,13 +926,13 @@ Answer length:
 ${responseSettings.instruction}
 
 Use numbered points only when the user asks for steps, reasons, examples, comparisons, pros and cons, or a list.
-For simple definitions, meanings, translations, or quick facts, use one or two short plain paragraphs without numbers.
+For simple definitions, meanings, translations, or quick facts, use a few short plain sentences without numbers.
 Put a blank line between points or paragraphs.
 For example requests, give 2 to 4 concrete examples with short explanations.
 If the user asks "what", infer they mean the previous answer unless context says otherwise.
-Keep each answer clear, but do not make it so short that important context is missing.
+Keep each answer clear and natural. Prefer short, direct wording.
 Every numbered point must be complete. Never output an empty number like "2." or "2".
-Add one short closing line only if useful.
+Do not add a closing line unless the user asks for advice or next steps.
 Avoid long paragraphs, dense blocks, markdown tables, and markdown bold markers.
 
 ${recentConversation ? `Recent conversation:\n${recentConversation}\n\n` : ""}${pageText ? `${pageText}\n\n` : ""}User question:\n${userQuestion}`;
@@ -943,7 +943,7 @@ const getResponseSettings = (question) => {
   const wantsKeyPoints =
     /\b(key point|key points|main point|main points|takeaway|takeaways)\b/.test(value);
   const wantsDetail =
-    /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|tell me about|medium|long)\b/.test(
+    /\b(explain|example|examples|why|how|compare|difference|steps|details|detail|describe|break down|medium|long)\b/.test(
       value,
     );
   const wantsBrief = /\b(short|brief|quick|summarize|summary|tldr|tl;dr)\b/.test(value);
@@ -952,7 +952,7 @@ const getResponseSettings = (question) => {
     return {
       maxOutputTokens: SHORT_ANSWER_TOKENS,
       instruction:
-        "Use **Key Points:**, then exactly 3 numbered points. Keep each point under 10 words.",
+        "Use **Key Points:**, then 2 to 5 numbered points as needed. Keep each point under 15 words.",
     };
   }
 
@@ -976,14 +976,14 @@ const getResponseSettings = (question) => {
     return {
       maxOutputTokens: LONG_ANSWER_TOKENS,
       instruction:
-        "Use a fuller answer: cover the important parts clearly, but keep paragraphs short.",
+        "Use a fuller answer, but stay under about 800 tokens. Cover only the important parts clearly.",
     };
   }
 
   return {
     maxOutputTokens: SHORT_ANSWER_TOKENS,
     instruction:
-      "Use a concise answer: 1 to 2 short paragraphs, unless the user asks for a list or more detail.",
+      "Use a short informal answer: 2 to 4 short sentences. Do not add extra background unless needed.",
   };
 };
 
