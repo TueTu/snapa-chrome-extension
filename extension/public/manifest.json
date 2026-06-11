@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Snapa Chat",
   "version": "1.0",
-  "description": "A simple AI chat extension powered by the user's API key",
+  "description": "Chat with Gemini or OpenRouter using your API key, selected text, and optional page context.",
   "action": {
     "default_popup": "index.html",
     "default_title": "Snapa Chat",

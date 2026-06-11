@@ -1,6 +1,6 @@
 # Snapa Chrome Extension
 
-React/Vite Chrome extension that lets each user chat with Gemini or OpenRouter using their own API key.
+React/Vite Chrome extension that lets each user chat with Gemini or OpenRouter using their own API key, selected text, and optional page context.
 
 ## How It Works
 
@@ -14,6 +14,8 @@ React/Vite Chrome extension that lets each user chat with Gemini or OpenRouter u
 ## Release Notes
 
 - The API key is saved locally in the browser extension's storage. Do not claim that it is encrypted.
+- The Chrome Web Store listing should describe browser-specific functionality: popup chat, selected-text context menu, user-triggered page context, local key storage, and custom prompt templates.
+- Avoid generic or repeated keywords such as "AI chat assistant" without explaining the concrete user workflow.
 - The extension needs `activeTab` and `scripting` so it can read the current page only after the user invokes the extension.
 - Publish or link the privacy policy in [PRIVACY.md](./PRIVACY.md) before submitting to the Chrome Web Store.
 - Test a fresh install, invalid API key, provider quota/rate limit, restricted Chrome page, context-menu selection, and switching tabs after using page context before publishing.
