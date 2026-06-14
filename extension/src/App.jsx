@@ -1763,10 +1763,6 @@ function App() {
             <h2>Connect your AI provider</h2>
             <p>Choose the API you want to use, then save your key to start chatting.</p>
           </div>
-          <div className="setup-review-note">
-            Snapa Chat runs in this extension popup. It sends chat requests directly to the
-            provider you choose and stores your API key only in Chrome extension storage.
-          </div>
 
           <div className="provider-grid" role="radiogroup" aria-label="AI provider">
             {Object.entries(PROVIDERS).map(([value, item]) => (
