@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Snapa Chat",
-  "version": "1.0",
-  "description": "Chat with Gemini or OpenRouter using your API key, selected text, and optional page context.",
+  "version": "1.0.1",
+  "description": "Use your own Gemini or OpenRouter API key to chat, send selected text, and ask about the current page.",
   "action": {
     "default_popup": "index.html",
     "default_title": "Snapa Chat",

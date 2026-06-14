@@ -10,6 +10,7 @@ React/Vite Chrome extension that lets each user chat with Gemini or OpenRouter u
 - There is no Node/Express backend and no shared owner API key.
 - Page text is only captured when the user chooses "Use this page".
 - Selected text from the context menu is stored temporarily and cleared after the popup reads it.
+- The context menu only appears for selected text; full-page context is captured from the popup after the user chooses "Use this page".
 
 ## Release Notes
 
@@ -17,6 +18,7 @@ React/Vite Chrome extension that lets each user chat with Gemini or OpenRouter u
 - The Chrome Web Store listing should describe browser-specific functionality: popup chat, selected-text context menu, user-triggered page context, local key storage, and custom prompt templates.
 - Avoid generic or repeated keywords such as "AI chat assistant" without explaining the concrete user workflow.
 - The extension needs `activeTab` and `scripting` so it can read the current page only after the user invokes the extension.
+- Do not add the broader `tabs` permission unless a new feature truly requires it.
 - Publish or link the privacy policy in [PRIVACY.md](./PRIVACY.md) before submitting to the Chrome Web Store.
 - Test a fresh install, invalid API key, provider quota/rate limit, restricted Chrome page, context-menu selection, and switching tabs after using page context before publishing.
 

@@ -1,6 +1,6 @@
 # Snapa Chat Privacy Policy
 
-Last updated: May 31, 2026
+Last updated: June 14, 2026
 
 Snapa Chat is a Chrome extension that lets users chat with Gemini or OpenRouter using their own API key. The extension does not run a developer-owned backend service.
 
@@ -32,7 +32,7 @@ Snapa Chat does not sell user data, does not use user data for advertising, and 
 
 ## Page And Selection Access
 
-Snapa Chat reads page content only after the user invokes the extension feature that uses the current page. Selected text from the context menu is stored temporarily so it can be inserted into the popup, then cleared after the popup reads it.
+Snapa Chat reads page content only after the user chooses "Use this page" in the extension popup. Selected text from the context menu is stored temporarily so it can be inserted into the popup, then cleared after the popup reads it.
 
 ## Developer Access
 

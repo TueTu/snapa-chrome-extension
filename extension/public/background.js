@@ -44,7 +44,7 @@ chrome.runtime.onInstalled.addListener(() => {
     {
       id: CONTEXT_MENU_ID,
       title: "Send to Snapa Chat",
-      contexts: ["selection", "page"],
+      contexts: ["selection"],
     },
     () => {
       if (chrome.runtime.lastError) return;

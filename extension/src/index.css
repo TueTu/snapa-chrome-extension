@@ -287,6 +287,16 @@ body {
   line-height: 1.45;
 }
 
+.setup-review-note {
+  padding: 0.72rem 0.82rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--input-bg) 82%, var(--bg-color) 18%);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.42;
+}
+
 .provider-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
