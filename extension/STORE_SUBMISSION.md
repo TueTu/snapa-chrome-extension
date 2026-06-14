@@ -46,7 +46,7 @@ The right-click menu only appears for selected text. Full-page context is captur
 
 - Updated the extension version to 1.0.1.
 - Changed the context menu to appear only for selected text, matching the behavior it performs.
-- Added setup-screen copy explaining that API requests go directly to the selected provider and that the API key is stored only in Chrome extension storage.
+- Kept the visible setup screen focused on the user-owned API key workflow.
 - Updated listing copy and reviewer notes to avoid generic keyword wording and to make the reviewer-owned API key requirement explicit.
 
 ## Appeal Text
@@ -59,4 +59,4 @@ Its core functionality is a Chrome extension popup that lets users chat with Gem
 
 The extension does not launch another app or web page as its sole purpose. API calls are made directly from the extension to the selected provider, and no developer-owned backend receives user API keys or chat content.
 
-For this resubmission, I updated the listing metadata, reviewer notes, and extension UI to clearly describe the browser-specific functionality and avoid generic or excessive keyword wording. I also changed the context menu to appear only when text is selected, matching the feature behavior.
+For this resubmission, I updated the listing metadata and reviewer notes to clearly describe the browser-specific functionality and avoid generic or excessive keyword wording. I also changed the context menu to appear only when text is selected, matching the feature behavior.
